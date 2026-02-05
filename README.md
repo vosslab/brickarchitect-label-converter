@@ -7,6 +7,7 @@ Convert Brother P-touch LBX label sets into Avery 5167 label sheets as PDFs. Thi
 - [docs/USAGE.md](docs/USAGE.md): CLI usage and examples.
 - [docs/PLAN.md](docs/PLAN.md): Implementation plan and workflow notes.
 - [docs/CHANGELOG.md](docs/CHANGELOG.md): Timeline of changes.
+- [docs/LABEL_BOUNDARIES.md](docs/LABEL_BOUNDARIES.md): How label boundaries are detected.
 - [docs/PYTHON_STYLE.md](docs/PYTHON_STYLE.md): Python style rules for this repo.
 - [docs/MARKDOWN_STYLE.md](docs/MARKDOWN_STYLE.md): Markdown style rules for this repo.
 - [docs/REPO_STYLE.md](docs/REPO_STYLE.md): Repo organization and conventions.

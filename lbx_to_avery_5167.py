@@ -21,6 +21,7 @@ import PIL.Image
 import pypdf
 import reportlab.lib.pagesizes
 import reportlab.lib.utils
+import reportlab.pdfbase.pdfmetrics
 import reportlab.pdfgen.canvas
 
 
@@ -43,6 +44,15 @@ DEFAULT_FONT_REGULAR = "Helvetica"
 DEFAULT_FONT_BOLD = "Helvetica-Bold"
 DEFAULT_FONT_ITALIC = "Helvetica-Oblique"
 DEFAULT_FONT_BOLD_ITALIC = "Helvetica-BoldOblique"
+DEFAULT_TEXT_SIZE = 7.5
+DEFAULT_TEXT_WEIGHT = 700
+DEFAULT_TEXT_MIN_SIZE = 5.0
+TEXT_OVERLAP_PADDING = 0.5
+PROGRESS_BAR_WIDTH = 20
+PROGRESS_UPDATE_EVERY = 10
+SEPARATOR_THICKNESS = 1.0
+SEPARATOR_MIN_LENGTH = 8.0
+BACKGROUND_SPAN_FACTOR = 1.6
 
 
 @dataclasses.dataclass
@@ -181,6 +191,448 @@ def compute_align_offset(available: float, scaled: float, align: str) -> float:
 	if normalized in ("RIGHT", "TOP"):
 		return max(0.0, available - scaled)
 	return max(0.0, (available - scaled) / 2.0)
+
+
+#============================================
+def compute_text_bbox(
+	x: float,
+	baseline_y: float,
+	text: str,
+	font_name: str,
+	font_size: float,
+	padding: float,
+) -> tuple[float, float, float, float]:
+	"""
+	Compute a text bounding box from a baseline position.
+
+	Args:
+		x: Text x position.
+		baseline_y: Text baseline y position.
+		text: Text content.
+		font_name: ReportLab font name.
+		font_size: Font size in points.
+		padding: Padding for overlap detection.
+
+	Returns:
+		Bounding box (x0, y0, x1, y1).
+	"""
+	width = reportlab.pdfbase.pdfmetrics.stringWidth(text, font_name, font_size)
+	ascent = reportlab.pdfbase.pdfmetrics.getAscent(font_name) * font_size / 1000.0
+	descent = reportlab.pdfbase.pdfmetrics.getDescent(font_name) * font_size / 1000.0
+	x0 = x - padding
+	x1 = x + width + padding
+	y0 = baseline_y + descent - padding
+	y1 = baseline_y + ascent + padding
+	return (x0, y0, x1, y1)
+
+
+#============================================
+def boxes_intersect(
+	first: tuple[float, float, float, float],
+	second: tuple[float, float, float, float],
+) -> bool:
+	"""
+	Check whether two bounding boxes intersect.
+
+	Args:
+		first: First bounding box.
+		second: Second bounding box.
+
+	Returns:
+		True if boxes intersect.
+	"""
+	if first[2] <= second[0]:
+		return False
+	if second[2] <= first[0]:
+		return False
+	if first[3] <= second[1]:
+		return False
+	if second[3] <= first[1]:
+		return False
+	return True
+
+
+#============================================
+def merge_positions(values: list[float], tolerance: float) -> list[float]:
+	"""
+	Merge nearby separator positions.
+
+	Args:
+		values: Raw separator positions.
+		tolerance: Merge tolerance in points.
+
+	Returns:
+		Merged separator positions.
+	"""
+	if not values:
+		return []
+	positions = sorted(values)
+	merged = [positions[0]]
+	for value in positions[1:]:
+		if abs(value - merged[-1]) <= tolerance:
+			merged[-1] = (merged[-1] + value) / 2.0
+			continue
+		merged.append(value)
+	return merged
+
+
+#============================================
+def print_progress(prefix: str, current: int, total: int) -> None:
+	"""
+	Print a single-line progress bar.
+
+	Args:
+		prefix: Progress prefix label.
+		current: Current count.
+		total: Total count.
+	"""
+	if total <= 0:
+		return
+	ratio = min(1.0, max(0.0, current / total))
+	filled = int(ratio * PROGRESS_BAR_WIDTH)
+	bar = "#" * filled + "-" * (PROGRESS_BAR_WIDTH - filled)
+	percent = int(ratio * 100)
+	print(f"\r{prefix} [{bar}] {current}/{total} ({percent}%)", end="", flush=True)
+
+
+#============================================
+def find_separators(
+	objects: list[LabelObject],
+) -> tuple[list[float], list[float]]:
+	"""
+	Detect separator lines from poly objects.
+
+	Args:
+		objects: Label objects.
+
+	Returns:
+		Tuple of (vertical_positions, horizontal_positions).
+	"""
+	vertical: list[float] = []
+	horizontal: list[float] = []
+	for obj in objects:
+		if obj.kind != "poly":
+			continue
+		if obj.width <= SEPARATOR_THICKNESS and obj.height >= SEPARATOR_MIN_LENGTH:
+			vertical.append(obj.x + obj.width / 2.0)
+			continue
+		if obj.height <= SEPARATOR_THICKNESS and obj.width >= SEPARATOR_MIN_LENGTH:
+			horizontal.append(obj.y + obj.height / 2.0)
+	return (
+		merge_positions(vertical, SEPARATOR_THICKNESS),
+		merge_positions(horizontal, SEPARATOR_THICKNESS),
+	)
+
+
+#============================================
+def extract_background_bounds(
+	label_xml: bytes,
+) -> tuple[float, float, float, float] | None:
+	"""
+	Extract background bounds from label XML.
+
+	Args:
+		label_xml: XML bytes.
+
+	Returns:
+		Tuple of (x, y, width, height) or None.
+	"""
+	root = ElementTree.fromstring(label_xml)
+	background = root.find(".//{*}backGround")
+	if background is None:
+		return None
+	x = parse_pt_value(background.attrib.get("x"), 0.0)
+	y = parse_pt_value(background.attrib.get("y"), 0.0)
+	width = parse_pt_value(background.attrib.get("width"), 0.0)
+	height = parse_pt_value(background.attrib.get("height"), 0.0)
+	if width <= 0.0 or height <= 0.0:
+		return None
+	return (x, y, width, height)
+
+
+#============================================
+def update_cluster_bounds(cluster: "LabelCluster") -> None:
+	"""
+	Recompute the bounds for a LabelCluster.
+
+	Args:
+		cluster: LabelCluster to update.
+	"""
+	if not cluster.objects:
+		return
+	min_x = min(item.x for item in cluster.objects)
+	min_y = min(item.y for item in cluster.objects)
+	max_x = max(item.x + item.width for item in cluster.objects)
+	max_y = max(item.y + item.height for item in cluster.objects)
+	cluster.min_x = min_x
+	cluster.min_y = min_y
+	cluster.width = max_x - min_x
+	cluster.height = max_y - min_y
+
+
+#============================================
+def cluster_objects_by_grid(
+	objects: list["LabelObject"],
+	source_path: str,
+	origin_x: float,
+	origin_y: float,
+	col_step: float,
+	row_step: float,
+) -> list["LabelCluster"]:
+	"""
+	Cluster objects into grid cells using a fixed origin and step sizes.
+
+	Args:
+		objects: Label objects to cluster.
+		source_path: Source LBX path.
+		origin_x: Grid origin x.
+		origin_y: Grid origin y.
+		col_step: Column step width.
+		row_step: Row step height.
+
+	Returns:
+		List of LabelCluster entries.
+	"""
+	if not objects or col_step <= 0.0 or row_step <= 0.0:
+		return []
+	bins: dict[tuple[int, int], list[LabelObject]] = {}
+	for obj in objects:
+		center_x = obj.x + obj.width / 2.0
+		center_y = obj.y + obj.height / 2.0
+		col = int((center_x - origin_x) // col_step)
+		row = int((center_y - origin_y) // row_step)
+		bins.setdefault((row, col), []).append(obj)
+
+	label_clusters: list[LabelCluster] = []
+	cluster_index = 1
+	for key in sorted(bins.keys()):
+		cluster = bins[key]
+		label_cluster = create_label_cluster(cluster, source_path, cluster_index)
+		if label_cluster is not None:
+			label_clusters.append(label_cluster)
+			cluster_index += 1
+	return label_clusters
+
+
+#============================================
+def score_cluster_layout(
+	clusters: list["LabelCluster"],
+	expected_labels: int,
+) -> float:
+	"""
+	Score a clustering layout to select the best grid settings.
+
+	Args:
+		clusters: Candidate clusters.
+		expected_labels: Expected label count.
+
+	Returns:
+		Score value (higher is better).
+	"""
+	both_count = 0
+	text_only = 0
+	image_only = 0
+	oversize = 0
+	for cluster in clusters:
+		has_text = any(obj.kind == "text" for obj in cluster.objects)
+		has_image = any(obj.kind == "image" for obj in cluster.objects)
+		if has_text and has_image:
+			both_count += 1
+		elif has_text:
+			text_only += 1
+		elif has_image:
+			image_only += 1
+		if len(cluster.objects) > 3:
+			oversize += 1
+
+	cluster_count = len(clusters)
+	missing = max(0, expected_labels - cluster_count)
+	extra = max(0, cluster_count - expected_labels)
+
+	score = 0.0
+	score += both_count * 5.0
+	score -= image_only * 4.0
+	score -= text_only * 1.0
+	score -= oversize * 2.0
+	score -= missing * 5.0
+	score -= extra * 1.0
+	return score
+
+
+#============================================
+def merge_image_only_clusters(
+	clusters: list["LabelCluster"],
+	row_step: float,
+	col_step: float,
+) -> list["LabelCluster"]:
+	"""
+	Merge image-only clusters into the nearest text cluster.
+
+	Args:
+		clusters: Label clusters to merge.
+		row_step: Grid row height.
+		col_step: Grid column width.
+
+	Returns:
+		Merged list of LabelCluster entries.
+	"""
+	if not clusters or row_step <= 0.0 or col_step <= 0.0:
+		return clusters
+
+	image_only_indices = []
+	text_only_indices = []
+	text_indices = []
+	for index, cluster in enumerate(clusters):
+		has_text = any(obj.kind == "text" for obj in cluster.objects)
+		has_image = any(obj.kind == "image" for obj in cluster.objects)
+		if has_image and not has_text:
+			image_only_indices.append(index)
+		if has_text and not has_image:
+			text_only_indices.append(index)
+		if has_text:
+			text_indices.append(index)
+
+	if not image_only_indices or not text_indices:
+		return clusters
+
+	centers = []
+	for cluster in clusters:
+		center_x = cluster.min_x + cluster.width / 2.0
+		center_y = cluster.min_y + cluster.height / 2.0
+		centers.append((center_x, center_y))
+
+	max_dx = col_step * 0.75
+	max_dy = row_step * 1.5
+
+	for index in image_only_indices:
+		center_x, center_y = centers[index]
+		candidates = text_only_indices or text_indices
+		best_index = None
+		best_score = None
+		for cand in candidates:
+			text_x, text_y = centers[cand]
+			dx = text_x - center_x
+			dy = abs(text_y - center_y)
+			if abs(dx) > max_dx or dy > max_dy:
+				continue
+			score = abs(dx) + dy * 1.5
+			if dx < 0:
+				score += abs(dx) * 0.5
+			if best_score is None or score < best_score:
+				best_score = score
+				best_index = cand
+		if best_index is None:
+			continue
+		clusters[best_index].objects.extend(clusters[index].objects)
+		update_cluster_bounds(clusters[best_index])
+		clusters[index].objects = []
+
+	return [cluster for cluster in clusters if cluster.objects]
+
+
+#============================================
+def build_clusters_from_background(
+	objects: list[LabelObject],
+	source_path: str,
+	background: tuple[float, float, float, float],
+) -> list[LabelCluster]:
+	"""
+	Build label clusters based on background grid sizing.
+
+	Args:
+		objects: List of LabelObject entries.
+		source_path: Source LBX path.
+		background: Background bounds (x, y, width, height).
+
+	Returns:
+		List of LabelCluster entries.
+	"""
+	if not objects:
+		return []
+	bg_x, bg_y, bg_width, bg_height = background
+	min_x = min(obj.x for obj in objects)
+	min_y = min(obj.y for obj in objects)
+	max_x = max(obj.x + obj.width for obj in objects)
+	max_y = max(obj.y + obj.height for obj in objects)
+	span_x = max_x - min_x
+	span_y = max_y - min_y
+	if span_x <= bg_width * BACKGROUND_SPAN_FACTOR and span_y <= bg_height * BACKGROUND_SPAN_FACTOR:
+		return []
+
+	text_count = sum(1 for obj in objects if obj.kind == "text")
+	image_count = sum(1 for obj in objects if obj.kind == "image")
+	expected_labels = max(text_count, image_count)
+
+	row_multipliers = [1]
+	max_multiplier = int(span_y // bg_height) if bg_height > 0 else 1
+	for multiplier in (2, 3):
+		if multiplier <= max_multiplier:
+			row_multipliers.append(multiplier)
+
+	col_multipliers = [1]
+	if span_x > bg_width * (BACKGROUND_SPAN_FACTOR + 0.1):
+		col_multipliers.append(2)
+
+	best_clusters: list[LabelCluster] = []
+	best_score = None
+	for row_multiplier in row_multipliers:
+		row_step = bg_height * row_multiplier
+		origin_y_values = [bg_y, bg_y + row_step / 2.0]
+		for col_multiplier in col_multipliers:
+			col_step = bg_width * col_multiplier
+			origin_x_values = [bg_x, bg_x + col_step / 2.0]
+			for origin_y in origin_y_values:
+				for origin_x in origin_x_values:
+					clusters = cluster_objects_by_grid(
+						objects,
+						source_path,
+						origin_x,
+						origin_y,
+						col_step,
+						row_step,
+					)
+					if not clusters:
+						continue
+					merged = merge_image_only_clusters(clusters, row_step, col_step)
+					score = score_cluster_layout(merged, expected_labels)
+					if best_score is None or score > best_score:
+						best_score = score
+						best_clusters = merged
+
+	return best_clusters
+
+
+#============================================
+def split_objects_by_separators(
+	objects: list[LabelObject],
+	separator_positions: list[float],
+	axis: str,
+) -> list[list[LabelObject]]:
+	"""
+	Split objects into bins based on separator positions.
+
+	Args:
+		objects: Label objects.
+		separator_positions: Separator positions.
+		axis: Axis to split by ("x" or "y").
+
+	Returns:
+		List of object bins.
+	"""
+	if not objects:
+		return []
+	if not separator_positions:
+		return [objects]
+	separators = sorted(separator_positions)
+	bins: list[list[LabelObject]] = [[] for _ in range(len(separators) + 1)]
+	use_x = axis != "y"
+	for obj in objects:
+		center = (obj.x + obj.width / 2.0) if use_x else (obj.y + obj.height / 2.0)
+		index = 0
+		while index < len(separators) and center >= separators[index]:
+			index += 1
+		bins[index].append(obj)
+	return [bucket for bucket in bins if bucket]
 
 
 #============================================
@@ -549,9 +1001,40 @@ def compute_gap_threshold(
 			gaps.append(gap)
 	if not gaps:
 		return min_threshold
+
 	median_gap = statistics.median(gaps)
-	threshold = max(min_threshold, median_gap * 2.0)
-	return threshold
+	trim_limit = median_gap * 2.0
+	trimmed_gaps = [gap for gap in gaps if gap <= trim_limit]
+	gaps_for_cluster = gaps
+	if len(trimmed_gaps) >= 2:
+		gaps_for_cluster = trimmed_gaps
+
+	if len(gaps_for_cluster) < 4:
+		threshold = max(min_threshold, median_gap * 2.0)
+		return threshold
+
+	cluster_a = min(gaps_for_cluster)
+	cluster_b = max(gaps_for_cluster)
+	for _ in range(10):
+		group_a: list[float] = []
+		group_b: list[float] = []
+		for gap in gaps_for_cluster:
+			if abs(gap - cluster_a) <= abs(gap - cluster_b):
+				group_a.append(gap)
+			else:
+				group_b.append(gap)
+		if not group_a or not group_b:
+			break
+		cluster_a = sum(group_a) / len(group_a)
+		cluster_b = sum(group_b) / len(group_b)
+
+	low, high = sorted([cluster_a, cluster_b])
+	if high <= low * 1.5:
+		threshold = max(min_threshold, median_gap * 2.0)
+		return threshold
+
+	threshold = (low + high) / 2.0
+	return max(min_threshold, threshold)
 
 
 #============================================
@@ -639,6 +1122,8 @@ def build_label_clusters(
 	objects: list[LabelObject],
 	source_path: str,
 	gap_threshold: float,
+	vertical_separators: list[float] | None = None,
+	horizontal_separators: list[float] | None = None,
 ) -> list[LabelCluster]:
 	"""
 	Build label clusters from objects.
@@ -647,16 +1132,23 @@ def build_label_clusters(
 		objects: List of LabelObject entries.
 		source_path: Source LBX path.
 		gap_threshold: Gap threshold in points.
+		vertical_separators: Optional vertical separator positions.
+		horizontal_separators: Optional horizontal separator positions.
 
 	Returns:
 		List of LabelCluster entries.
 	"""
-	row_threshold = compute_gap_threshold(objects, DEFAULT_GAP_THRESHOLD, axis="y")
-	row_clusters = cluster_objects(objects, row_threshold, axis="y")
+	row_clusters = split_objects_by_separators(objects, horizontal_separators or [], axis="y")
+	if not horizontal_separators:
+		row_threshold = compute_gap_threshold(objects, DEFAULT_GAP_THRESHOLD, axis="y")
+		row_clusters = cluster_objects(objects, row_threshold, axis="y")
 	label_clusters: list[LabelCluster] = []
 	cluster_index = 1
 	for row in row_clusters:
-		col_clusters = cluster_objects(row, gap_threshold, axis="x")
+		col_clusters = split_objects_by_separators(row, vertical_separators or [], axis="x")
+		if not vertical_separators:
+			col_threshold = compute_gap_threshold(row, gap_threshold, axis="x")
+			col_clusters = cluster_objects(row, col_threshold, axis="x")
 		for cluster in col_clusters:
 			label_cluster = create_label_cluster(cluster, source_path, cluster_index)
 			if label_cluster is not None:
@@ -768,6 +1260,7 @@ def collect_labels(
 	gap_threshold: float | None,
 	apply_normalization: bool,
 	max_labels: int | None = None,
+	verbose: bool = False,
 ) -> tuple[list[LabelCluster], dict[str, int], dict[str, str], dict[str, float]]:
 	"""
 	Collect label clusters from LBX files.
@@ -784,14 +1277,18 @@ def collect_labels(
 	counts_by_file: dict[str, int] = {}
 	hashes: dict[str, str] = {}
 	thresholds: dict[str, float] = {}
+	if verbose:
+		print("Collecting labels")
 
 	remaining_labels = max_labels
-	for path in paths:
+	total_paths = len(paths)
+	for index, path in enumerate(paths, start=1):
 		if remaining_labels is not None and remaining_labels <= 0:
 			break
 		with zipfile.ZipFile(path, "r") as archive:
 			label_xml = archive.read("label.xml")
 		group_clusters, loose_objects = parse_label_xml_with_groups(label_xml, apply_normalization)
+		background_bounds = extract_background_bounds(label_xml)
 		label_clusters: list[LabelCluster] = []
 
 		cluster_index = 1
@@ -805,12 +1302,27 @@ def collect_labels(
 				cluster_index += 1
 
 		visual_objects = [obj for obj in loose_objects if obj.kind in ("text", "image")]
+		vertical_separators, horizontal_separators = find_separators(loose_objects)
 		threshold = gap_threshold
 		if threshold is None:
 			threshold = compute_gap_threshold(visual_objects, DEFAULT_GAP_THRESHOLD)
 		thresholds[str(path)] = threshold
 
-		loose_clusters = build_label_clusters(visual_objects, str(path), threshold)
+		loose_clusters = []
+		if background_bounds is not None and not vertical_separators and not horizontal_separators:
+			loose_clusters = build_clusters_from_background(
+				visual_objects,
+				str(path),
+				background_bounds,
+			)
+		if not loose_clusters:
+			loose_clusters = build_label_clusters(
+				visual_objects,
+				str(path),
+				threshold,
+				vertical_separators=vertical_separators,
+				horizontal_separators=horizontal_separators,
+			)
 		for cluster in loose_clusters:
 			has_visual = any(obj.kind in ("text", "image") for obj in cluster.objects)
 			if not has_visual:
@@ -827,6 +1339,8 @@ def collect_labels(
 		hashes[str(path)] = compute_sha256(path)
 		if remaining_labels is not None:
 			remaining_labels -= len(label_clusters)
+		if verbose and (index % 10 == 0 or index == total_paths):
+			print(f"Processed {index} of {total_paths} LBX files")
 
 	return (labels, counts_by_file, hashes, thresholds)
 
@@ -863,13 +1377,18 @@ def draw_text_object(
 	font_size_override: float | None = None,
 	font_weight_override: int | None = None,
 	text_fit: bool = False,
-) -> None:
+	min_font_size: float | None = None,
+	clamp_counter: list[int] | None = None,
+) -> list[tuple[float, float, float, float]]:
 	"""
 	Draw a text object onto the PDF canvas.
 
 	Args:
 		pdf: ReportLab canvas.
 		obj: LabelObject to draw.
+
+	Returns:
+		List of text bounding boxes for overlap checks.
 	"""
 	font_weight = obj.font_weight
 	if font_weight_override is not None:
@@ -886,7 +1405,7 @@ def draw_text_object(
 	text_value = obj.text or ""
 	lines = text_value.splitlines()
 	if not lines:
-		return
+		return []
 
 	align_h = obj.align_horizontal.upper()
 	align_v = obj.align_vertical.upper()
@@ -906,10 +1425,20 @@ def draw_text_object(
 		scale_height = obj.height / text_height if text_height > 0 else 1.0
 		scale = min(1.0, scale_width, scale_height)
 		if scale < 1.0:
-			font_size *= scale
+			target_size = font_size * scale
+			clamped = False
+			if min_font_size is not None and target_size < min_font_size:
+				font_size = min_font_size
+				clamped = True
+			else:
+				font_size = target_size
 			pdf.setFont(font_name, font_size)
 			leading = compute_leading(font_size)
 			text_height = font_size + leading * (len(lines) - 1)
+			if clamped and clamp_counter is not None:
+				clamp_counter[0] += 1
+
+	bboxes: list[tuple[float, float, float, float]] = []
 
 	if align_v == "CENTER":
 		base_y = obj.y + (obj.height - text_height) / 2.0
@@ -928,6 +1457,17 @@ def draw_text_object(
 			text_x = obj.x
 		text_y = base_y + index * leading
 		pdf.drawString(text_x, text_y, line)
+		bboxes.append(
+			compute_text_bbox(
+				text_x,
+				text_y,
+				line,
+				font_name,
+				font_size,
+				TEXT_OVERLAP_PADDING,
+			)
+		)
+	return bboxes
 
 
 #============================================
@@ -1061,6 +1601,7 @@ def draw_label_cluster(
 				font_size_override=config.text_font_size,
 				font_weight_override=config.text_font_weight,
 				text_fit=config.text_fit,
+				min_font_size=DEFAULT_TEXT_MIN_SIZE,
 			)
 			continue
 		if obj.kind == "image":
@@ -1095,7 +1636,7 @@ def draw_cluster_to_tile(
 	cluster: LabelCluster,
 	config: TileConfig,
 	image_cache: dict[tuple[str, str], reportlab.lib.utils.ImageReader],
-) -> None:
+) -> tuple[int, int]:
 	"""
 	Draw a label cluster onto a tile PDF.
 
@@ -1104,11 +1645,14 @@ def draw_cluster_to_tile(
 		cluster: LabelCluster to draw.
 		config: Tile configuration.
 		image_cache: Image cache.
+
+	Returns:
+		Tuple of (overlap_count, min_font_clamp_count).
 	"""
 	available_width = config.label_width - 2.0 * config.inset
 	available_height = config.label_height - 2.0 * config.inset
 	if cluster.width <= 0 or cluster.height <= 0:
-		return
+		return (0, 0)
 
 	scale = min(available_width / cluster.width, available_height / cluster.height)
 	scaled_width = cluster.width * scale
@@ -1124,6 +1668,10 @@ def draw_cluster_to_tile(
 	def transform_y(value: float) -> float:
 		return base_y + (cluster.height - (value - cluster.min_y)) * scale
 
+	text_boxes: list[tuple[float, float, float, float]] = []
+	overlap_count = 0
+	min_font_clamps = [0]
+
 	for obj in cluster.objects:
 		if obj.kind == "text":
 			new_obj = dataclasses.replace(
@@ -1133,7 +1681,7 @@ def draw_cluster_to_tile(
 				width=obj.width * scale,
 				height=obj.height * scale,
 			)
-			draw_text_object(
+			new_boxes = draw_text_object(
 				pdf,
 				new_obj,
 				text_align_horizontal=config.text_align_horizontal,
@@ -1141,7 +1689,15 @@ def draw_cluster_to_tile(
 				font_size_override=config.text_font_size,
 				font_weight_override=config.text_font_weight,
 				text_fit=config.text_fit,
+				min_font_size=DEFAULT_TEXT_MIN_SIZE,
+				clamp_counter=min_font_clamps,
 			)
+			for new_box in new_boxes:
+				for prior in text_boxes:
+					if boxes_intersect(new_box, prior):
+						overlap_count += 1
+						break
+			text_boxes.extend(new_boxes)
 			continue
 		if obj.kind == "image":
 			key = (cluster.source_path, obj.image_name)
@@ -1167,6 +1723,7 @@ def draw_cluster_to_tile(
 			)
 			draw_poly_object(pdf, new_obj)
 			continue
+	return (overlap_count, min_font_clamps[0])
 
 
 #============================================
@@ -1175,7 +1732,7 @@ def render_tile_pdf(
 	output_path: pathlib.Path,
 	config: TileConfig,
 	image_cache: dict[tuple[str, str], reportlab.lib.utils.ImageReader],
-) -> None:
+) -> tuple[int, int]:
 	"""
 	Render a single label tile PDF.
 
@@ -1184,13 +1741,17 @@ def render_tile_pdf(
 		output_path: Output file path.
 		config: Tile configuration.
 		image_cache: Image cache.
+
+	Returns:
+		Tuple of (overlap_count, min_font_clamp_count).
 	"""
 	pdf = reportlab.pdfgen.canvas.Canvas(
 		str(output_path),
 		pagesize=(config.label_width, config.label_height),
 	)
-	draw_cluster_to_tile(pdf, cluster, config, image_cache)
+	overlap_count, clamp_count = draw_cluster_to_tile(pdf, cluster, config, image_cache)
 	pdf.save()
+	return (overlap_count, clamp_count)
 
 
 #============================================
@@ -1346,13 +1907,52 @@ def render_tiles(
 	"""
 	output_dir.mkdir(parents=True, exist_ok=True)
 	tiles: list[dict[str, str]] = []
-	for cluster in labels:
+	overlap_labels = 0
+	overlap_total = 0
+	min_font_labels = 0
+	min_font_total = 0
+	overlap_messages: list[str] = []
+	missing_text_labels = 0
+	image_after_text_labels = 0
+	validation_messages: list[str] = []
+	total = len(labels)
+	if total > 0:
+		print_progress("Tiles", 0, total)
+	for index, cluster in enumerate(labels, start=1):
 		source_path = pathlib.Path(cluster.source_path)
 		source_hash = hashes.get(cluster.source_path, "")[:8]
 		stem = sanitize_token(source_path.stem)
 		tile_name = f"{stem}_{cluster.index:03d}_{source_hash}.pdf"
 		tile_path = output_dir / tile_name
-		render_tile_pdf(cluster, tile_path, tile_config, image_cache)
+		text_objects = [
+			obj for obj in cluster.objects
+			if obj.kind == "text" and (obj.text or "").strip()
+		]
+		image_objects = [obj for obj in cluster.objects if obj.kind == "image"]
+		if not text_objects:
+			missing_text_labels += 1
+			validation_messages.append(f"No text in {tile_name}")
+		if text_objects and image_objects:
+			min_text_x = min(obj.x for obj in text_objects)
+			min_image_x = min(obj.x for obj in image_objects)
+			if min_image_x > min_text_x:
+				image_after_text_labels += 1
+				validation_messages.append(
+					f"Image after text in {tile_name} (text x={min_text_x:.1f}, image x={min_image_x:.1f})"
+				)
+		overlap_count, clamp_count = render_tile_pdf(
+			cluster,
+			tile_path,
+			tile_config,
+			image_cache,
+		)
+		if overlap_count > 0:
+			overlap_labels += 1
+			overlap_total += overlap_count
+			overlap_messages.append(f"Text overlaps in {tile_name}: {overlap_count}")
+		if clamp_count > 0:
+			min_font_labels += 1
+			min_font_total += clamp_count
 		tiles.append(
 			{
 				"id": tile_name.replace(".pdf", ""),
@@ -1361,6 +1961,24 @@ def render_tiles(
 				"index": str(cluster.index),
 			}
 		)
+		if total > 0 and (index % PROGRESS_UPDATE_EVERY == 0 or index == total):
+			print_progress("Tiles", index, total)
+	if total > 0:
+		print()
+	if overlap_messages:
+		for message in overlap_messages:
+			print(message)
+	if validation_messages:
+		for message in validation_messages:
+			print(message)
+	if overlap_total > 0:
+		print(f"Text overlap summary: {overlap_labels} labels, {overlap_total} overlaps")
+	if min_font_total > 0:
+		print(f"Min font size clamps: {min_font_labels} labels, {min_font_total} text runs")
+	if missing_text_labels > 0:
+		print(f"Missing text summary: {missing_text_labels} labels")
+	if image_after_text_labels > 0:
+		print(f"Image-after-text summary: {image_after_text_labels} labels")
 	return tiles
 
 
@@ -1639,8 +2257,8 @@ def build_tile_config(args: argparse.Namespace) -> TileConfig:
 		cluster_align_vertical="CENTER",
 		text_align_horizontal=None,
 		text_align_vertical=None,
-		text_font_size=None,
-		text_font_weight=None,
+		text_font_size=DEFAULT_TEXT_SIZE,
+		text_font_weight=DEFAULT_TEXT_WEIGHT,
 		text_fit=True,
 	)
 
@@ -1693,22 +2311,47 @@ def run_pipeline(args: argparse.Namespace) -> None:
 	Args:
 		args: Parsed argparse namespace.
 	"""
+	print("LBX to Avery 5167 pipeline")
+	print(f"Output PDF: {args.output_path}")
+	if args.manifest_path:
+		print(f"Manifest: {args.manifest_path}")
+	print(f"Normalize text: {args.normalize_text}")
+	print(f"Draw outlines: {args.draw_outlines}")
+	print(f"Calibration: {args.calibration}")
+	print(f"Include partial: {args.include_partial}")
+	if args.max_labels is not None:
+		print(f"Max labels: {args.max_labels}")
+	if args.max_pages is not None:
+		print(f"Max pages: {args.max_pages}")
+
 	paths = gather_lbx_paths(args.inputs)
+	print(f"LBX files found: {len(paths)}")
+
 	labels, counts_by_file, hashes, thresholds = collect_labels(
 		paths,
 		None,
 		args.normalize_text,
 		args.max_labels,
+		verbose=True,
 	)
+	print(f"Labels collected: {len(labels)}")
+
 	image_cache = build_image_cache(paths)
 	tile_config = build_tile_config(args)
 	output_path = pathlib.Path(args.output_path)
 	tiles_dir = output_path.parent / "tiles"
+	print(f"Tiles directory: {tiles_dir}")
+	print("Rendering tiles")
 	tiles = render_tiles(labels, tiles_dir, tile_config, image_cache, hashes)
+	print(f"Tiles rendered: {len(tiles)}")
 
 	tile_paths = [pathlib.Path(tile["path"]) for tile in tiles]
 	config = build_config(args)
+	print("Imposing tiles")
 	result = impose_tiles(tile_paths, output_path, config)
+	print(f"Pages written: {result.pages}")
+	print(f"Labels printed: {result.printed_labels}")
+	print(f"Labels leftover: {result.leftover_labels}")
 
 	manifest_path = args.manifest_path
 	if manifest_path is None:
@@ -1722,6 +2365,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 		result,
 		config,
 	)
+	print(f"Manifest written: {manifest_path}")
 
 
 #============================================
