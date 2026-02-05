@@ -1,0 +1,3 @@
+"""
+BrickArchitect label converter package.
+"""

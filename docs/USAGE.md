@@ -15,6 +15,12 @@ The script also inserts a category label per LBX file using the file name
 (black background with bold white text). Hyphens are converted to spaces
 and long names are wrapped across lines.
 
+## Maintenance
+To refresh the v40 baseline fixtures used by tests:
+```bash
+./refresh_v40_baseline.py
+```
+
 ## Options
 - `-o`, `--output`: Output PDF path.
 - `-m`, `--manifest`: Output manifest JSON path (defaults to `OUTPUT.pdf.json`).

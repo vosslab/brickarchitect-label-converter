@@ -1,0 +1,5 @@
+defusedxml
+pillow
+pymupdf
+pypdf
+reportlab

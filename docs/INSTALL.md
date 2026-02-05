@@ -5,9 +5,10 @@
 - `reportlab`
 - `pillow`
 - `pypdf`
+- `pymupdf`
 - `defusedxml`
 
 ## Install dependencies
 ```bash
-python3 -m pip install reportlab pillow pypdf defusedxml
+python3 -m pip install reportlab pillow pypdf pymupdf defusedxml
 ```

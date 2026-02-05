@@ -53,6 +53,29 @@
 - Merge text-only groups into image-only groups within the same row for whitelisted LBX files.
 - Fix text-merge whitelist entries to use the actual LBX stems (MINIFIG category/hair, NATURE-flower, OTHER-shooter_1).
 - Add `--stop-before-rendering` to stop after label collection for faster checks.
+- Log multi-image labels to `output/multi_image_labels.log`.
+- Print timing stats after the pipeline completes.
+- Use scaled visual bounds (including image scale caps) to improve centering.
+- Split multi-image clusters for `CLIP-clip_3` and `ANGLE-wedge_plate_63` using text pairing.
+- Merge text-only clusters into image-only clusters for multi-image split files.
+- Allow multi-image splitting even when only one text is present in a cluster.
+- Document label boundary exceptions and whitelists.
+- Add v40 baseline fixtures and tests for label counts and multi-image labels.
+- Add `refresh_v40_baseline.py` to regenerate v40 baseline fixtures.
+- Add periodicity-based row and column clustering with gap-based fallback.
+- Skip periodicity when splitting large XML groups to avoid oversplitting.
+- Add general image-text matching with score-based fallback to pairing.
+- Start Phase 3 with recursive segmentation of oversized clusters.
+- Mark Phase 3 (recursive segmentation) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
+- Add label bbox invariant and rendered page smoke tests.
+- Document PyMuPDF dependency in [docs/INSTALL.md](docs/INSTALL.md).
+- Mark Phase 2 (general image-text matching) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
+- Add [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md) to track refactor phases.
+- Split the pipeline into `brickarchitect_label_converter` modules and keep `lbx_to_avery_5167.py` as a wrapper entry point.
+- Mark Phase 4 (modularization) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
+- Add `pip_requirements.txt` with the core runtime dependencies.
+- Use a `balc` import alias for `brickarchitect_label_converter` modules.
+- Merge adjacent numeric text fragments for `INDEX-slope` to form `SLOPE 45-55-75`.
 
 ## 2026-02-04
 - Add plan document for the LBX to Avery 5167 conversion workflow.
