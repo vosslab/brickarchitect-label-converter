@@ -32,6 +32,27 @@
 - Trim extreme gaps when computing clustering thresholds to better split labels.
 - Defer overlap warnings until after the tile progress bar completes.
 - Add label validation warnings for missing text and image-after-text ordering.
+- Merge loose text into image-only groups when they share a row.
+- Insert category labels based on LBX file names (black background with white text).
+- Restrict multi-row background grid grouping to a small whitelist.
+- Add a per-row pairing pass (single row height) to fix image/text mismatches.
+- Add a whitelist for pairing image/text order in `MINIFIG-accessories-all`.
+- Wrap category label text and replace hyphens with spaces.
+- Sort LBX processing order by numeric category prefixes.
+- Add `MINIFIG-weapon_3` to the pairing whitelist.
+- Impose labels in column-first order instead of row-first.
+- Log low label-count LBX files to `output/label_counts.log`.
+- Use PATH `rm` in run.sh for the preferred coreutils variant.
+- Update label-count test to account for category labels.
+- Shrink all images to 95% of their box and center them to reduce bleed risk.
+- Keep multi-row grouping for `CLIP-flexible` but restrict loose text merging to a whitelist.
+- Center clusters using visual text bounds instead of full text boxes.
+- Cap image upscaling at 2x while keeping the 95% shrink.
+- Split large LBX groups into multiple label clusters when they contain many text entries.
+- Expand the loose text merge whitelist to cover MINIFIG clothing/hair, NATURE flowers, and OTHER shooter labels.
+- Merge text-only groups into image-only groups within the same row for whitelisted LBX files.
+- Fix text-merge whitelist entries to use the actual LBX stems (MINIFIG category/hair, NATURE-flower, OTHER-shooter_1).
+- Add `--stop-before-rendering` to stop after label collection for faster checks.
 
 ## 2026-02-04
 - Add plan document for the LBX to Avery 5167 conversion workflow.

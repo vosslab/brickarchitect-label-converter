@@ -29,6 +29,7 @@ This document explains how the script decides where one label ends and the next 
 - Grid grouping is only used when no separator lines are present.
 - If objects span more than 1.6 times the background width or height, the script bins objects into a row and column grid using the background size.
 - The grid is evaluated with a few row height multipliers and origin offsets to reduce image-only labels.
+- Multi-row grid sizes are only used for a small whitelist of known stacked-row LBX files.
 - The best grid candidate is chosen by scoring how many labels contain both text and images.
 - Image-only labels are merged into the nearest text label to keep images paired with text.
 
@@ -45,6 +46,11 @@ This document explains how the script decides where one label ends and the next 
 - The X gap threshold is computed per row.
 - The gap thresholds use a 2-group split of gap sizes when possible.
 - A minimum threshold is enforced to avoid tiny noise splits.
+
+## Step 7: Per-row pairing pass (whitelisted)
+- A per-row pairing pass can be enabled for specific LBX files that routinely swap
+  image/text order (for example, `MINIFIG-accessories-all`).
+- The pass uses a single row height and pairs images to the next text within that row.
 
 ## Determinism
 - LBX file paths are sorted.
