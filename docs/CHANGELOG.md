@@ -76,6 +76,12 @@
 - Add `pip_requirements.txt` with the core runtime dependencies.
 - Use a `balc` import alias for `brickarchitect_label_converter` modules.
 - Merge adjacent numeric text fragments for `INDEX-slope` to form `SLOPE 45-55-75`.
+- Add `pyproject.toml` and `VERSION` for packaging metadata.
+- Update [docs/INSTALL.md](docs/INSTALL.md) to install dependencies via `pip_requirements.txt`.
+- Refresh README documentation links and update the testing command.
+- Add documentation stubs for code architecture, file structure, roadmap, and troubleshooting.
+- Filter PyMuPDF swig deprecation warnings in pytest config.
+- Update render smoke test to use `get_flattened_data` when available.
 
 ## 2026-02-04
 - Add plan document for the LBX to Avery 5167 conversion workflow.

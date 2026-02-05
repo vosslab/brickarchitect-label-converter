@@ -3,11 +3,17 @@
 Convert Brother P-touch LBX label sets into Avery 5167 label sheets as PDFs. This is for batch printing LEGO storage labels without wasting partial sticker sheets.
 
 ## Documentation
+Getting started:
 - [docs/INSTALL.md](docs/INSTALL.md): Setup requirements and dependencies.
 - [docs/USAGE.md](docs/USAGE.md): CLI usage and examples.
-- [docs/PLAN.md](docs/PLAN.md): Implementation plan and workflow notes.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md): Timeline of changes.
+
+Workflow and behavior:
 - [docs/LABEL_BOUNDARIES.md](docs/LABEL_BOUNDARIES.md): How label boundaries are detected.
+- [docs/PLAN.md](docs/PLAN.md): Implementation plan and workflow notes.
+- [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md): Refactor phases and status.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): Timeline of changes.
+
+Standards:
 - [docs/PYTHON_STYLE.md](docs/PYTHON_STYLE.md): Python style rules for this repo.
 - [docs/MARKDOWN_STYLE.md](docs/MARKDOWN_STYLE.md): Markdown style rules for this repo.
 - [docs/REPO_STYLE.md](docs/REPO_STYLE.md): Repo organization and conventions.
@@ -23,5 +29,5 @@ Add `--calibration` to prepend a calibration page. Omit `--include-partial` to o
 
 ## Testing
 ```bash
-python3 -m pytest tests/test_lbx_to_avery_5167.py
+python3 -m pytest tests/
 ```

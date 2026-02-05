@@ -10,5 +10,5 @@
 
 ## Install dependencies
 ```bash
-python3 -m pip install reportlab pillow pypdf pymupdf defusedxml
+python3 -m pip install -r pip_requirements.txt
 ```

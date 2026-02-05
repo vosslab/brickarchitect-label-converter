@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brickarchitect-label-converter"
+version = "26.02.0"
+description = "Convert Brother P-touch LBX labels into Avery 5167 label sheets."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+dependencies = [
+  "defusedxml",
+  "pillow",
+  "pymupdf",
+  "pypdf",
+  "reportlab",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore:.*SwigPyPacked.*:DeprecationWarning",
+  "ignore:.*SwigPyObject.*:DeprecationWarning",
+  "ignore:.*swigvarlink.*:DeprecationWarning",
+]

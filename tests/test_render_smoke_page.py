@@ -67,7 +67,10 @@ def _count_ink_ratio(gray: PIL.Image.Image, threshold: int) -> float:
 	Returns:
 		Ink ratio.
 	"""
-	pixels = gray.getdata()
+	if hasattr(gray, "get_flattened_data"):
+		pixels = list(gray.get_flattened_data())
+	else:
+		pixels = list(gray.getdata())
 	if not pixels:
 		return 0.0
 	ink = sum(1 for value in pixels if value < threshold)
