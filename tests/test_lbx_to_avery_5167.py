@@ -9,7 +9,7 @@ def test_basic_brick_label_count_and_pdf(tmp_path: pathlib.Path) -> None:
 	Verify label clustering and PDF output for a known LBX file.
 	"""
 	path = pathlib.Path("LEGO_BRICK_LABELS-v40/Labels/1.BASIC/BASIC-brick-1x.lbx")
-	labels, counts_by_file, hashes, thresholds = lbx_to_avery_5167.collect_labels([path], None)
+	labels, counts_by_file, hashes, thresholds = lbx_to_avery_5167.collect_labels([path], None, True)
 	assert len(labels) == 10
 	assert counts_by_file[str(path)] == 10
 	assert str(path) in hashes
@@ -31,6 +31,15 @@ def test_basic_brick_label_count_and_pdf(tmp_path: pathlib.Path) -> None:
 		include_partial=True,
 		calibration=False,
 		draw_outlines=False,
+		max_pages=None,
+		max_labels=None,
+		cluster_align_horizontal="CENTER",
+		cluster_align_vertical="CENTER",
+		text_align_horizontal=None,
+		text_align_vertical=None,
+		text_font_size=None,
+		text_font_weight=None,
+		text_fit=True,
 	)
 	result = lbx_to_avery_5167.render_labels_to_pdf(labels, [path], output_path, config)
 	assert result.printed_labels == 10

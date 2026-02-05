@@ -13,11 +13,7 @@ Convert Brother P-touch LBX label sets into Avery 5167 label sheets as PDFs. Thi
 
 ## Quick start
 ```bash
-python3 lbx_to_avery_5167.py tiles LEGO_BRICK_LABELS-v40/Labels \
-  --tiles-dir output/tiles \
-  --manifest output/tiles.json
-
-python3 lbx_to_avery_5167.py impose output/tiles \
+python3 lbx_to_avery_5167.py LEGO_BRICK_LABELS-v40/Labels \
   --output output/avery_5167.pdf \
   --draw-outlines
 ```

@@ -12,8 +12,10 @@ import io
 import json
 import pathlib
 import statistics
+import unicodedata
 import zipfile
-import xml.etree.ElementTree as ElementTree
+import defusedxml.ElementTree as ElementTree
+import xml.etree.ElementTree as StdElementTree
 
 import PIL.Image
 import pypdf
@@ -91,6 +93,15 @@ class ImpositionConfig:
 	include_partial: bool
 	calibration: bool
 	draw_outlines: bool
+	max_pages: int | None
+	max_labels: int | None
+	cluster_align_horizontal: str
+	cluster_align_vertical: str
+	text_align_horizontal: str | None
+	text_align_vertical: str | None
+	text_font_size: float | None
+	text_font_weight: int | None
+	text_fit: bool
 
 
 @dataclasses.dataclass
@@ -98,6 +109,13 @@ class TileConfig:
 	label_width: float
 	label_height: float
 	inset: float
+	cluster_align_horizontal: str
+	cluster_align_vertical: str
+	text_align_horizontal: str | None
+	text_align_vertical: str | None
+	text_font_size: float | None
+	text_font_weight: int | None
+	text_fit: bool
 
 
 @dataclasses.dataclass
@@ -145,6 +163,26 @@ def parse_pt_value(value: str, default_value: float) -> float:
 	return float(value)
 
 
+def compute_align_offset(available: float, scaled: float, align: str) -> float:
+	"""
+	Compute an offset based on alignment.
+
+	Args:
+		available: Available length.
+		scaled: Content length.
+		align: Alignment string.
+
+	Returns:
+		Offset in points.
+	"""
+	normalized = align.strip().upper()
+	if normalized in ("LEFT", "BOTTOM"):
+		return 0.0
+	if normalized in ("RIGHT", "TOP"):
+		return max(0.0, available - scaled)
+	return max(0.0, (available - scaled) / 2.0)
+
+
 #============================================
 def parse_hex_color(value: str) -> tuple[float, float, float]:
 	"""
@@ -165,7 +203,10 @@ def parse_hex_color(value: str) -> tuple[float, float, float]:
 
 
 #============================================
-def find_first_child(element: ElementTree.Element, suffix: str) -> ElementTree.Element | None:
+def find_first_child(
+	element: StdElementTree.Element,
+	suffix: str,
+) -> StdElementTree.Element | None:
 	"""
 	Find the first child element that ends with the given suffix.
 
@@ -183,7 +224,7 @@ def find_first_child(element: ElementTree.Element, suffix: str) -> ElementTree.E
 
 
 #============================================
-def parse_text_element(element: ElementTree.Element) -> LabelObject | None:
+def parse_text_element(element: StdElementTree.Element) -> LabelObject | None:
 	"""
 	Parse a text element into a LabelObject.
 
@@ -254,7 +295,7 @@ def parse_text_element(element: ElementTree.Element) -> LabelObject | None:
 
 
 #============================================
-def parse_image_element(element: ElementTree.Element) -> LabelObject | None:
+def parse_image_element(element: StdElementTree.Element) -> LabelObject | None:
 	"""
 	Parse an image element into a LabelObject.
 
@@ -292,7 +333,7 @@ def parse_image_element(element: ElementTree.Element) -> LabelObject | None:
 
 
 #============================================
-def parse_poly_element(element: ElementTree.Element) -> LabelObject | None:
+def parse_poly_element(element: StdElementTree.Element) -> LabelObject | None:
 	"""
 	Parse a poly element into a LabelObject.
 
@@ -356,7 +397,7 @@ def parse_poly_element(element: ElementTree.Element) -> LabelObject | None:
 
 
 #============================================
-def parse_label_xml(label_xml: bytes) -> list[LabelObject]:
+def parse_label_xml(label_xml: bytes, apply_normalization: bool) -> list[LabelObject]:
 	"""
 	Parse label XML content into label objects.
 
@@ -372,6 +413,8 @@ def parse_label_xml(label_xml: bytes) -> list[LabelObject]:
 		if element.tag.endswith("text"):
 			text_object = parse_text_element(element)
 			if text_object is not None:
+				if apply_normalization:
+					text_object.text = normalize_text(text_object.text)
 				objects.append(text_object)
 			continue
 		if element.tag.endswith("image"):
@@ -387,26 +430,121 @@ def parse_label_xml(label_xml: bytes) -> list[LabelObject]:
 
 
 #============================================
-def compute_gap_threshold(objects: list[LabelObject], min_threshold: float) -> float:
+def parse_objects_in_container(
+	element: StdElementTree.Element,
+	apply_normalization: bool,
+) -> list[LabelObject]:
+	"""
+	Parse label objects within a container element.
+
+	Args:
+		element: Container XML element.
+
+	Returns:
+		List of LabelObject entries.
+	"""
+	objects: list[LabelObject] = []
+	for child in element.iter():
+		if child is element:
+			continue
+		if child.tag.endswith("text"):
+			text_object = parse_text_element(child)
+			if text_object is not None:
+				if apply_normalization:
+					text_object.text = normalize_text(text_object.text)
+				objects.append(text_object)
+			continue
+		if child.tag.endswith("image"):
+			image_object = parse_image_element(child)
+			if image_object is not None:
+				objects.append(image_object)
+			continue
+		if child.tag.endswith("poly"):
+			poly_object = parse_poly_element(child)
+			if poly_object is not None:
+				objects.append(poly_object)
+	return objects
+
+
+#============================================
+def parse_label_xml_with_groups(
+	label_xml: bytes,
+	apply_normalization: bool,
+) -> tuple[list[list[LabelObject]], list[LabelObject]]:
+	"""
+	Parse label XML into group clusters and loose objects.
+
+	Args:
+		label_xml: XML bytes.
+
+	Returns:
+		Tuple of (group_clusters, loose_objects).
+	"""
+	root = ElementTree.fromstring(label_xml)
+	objects_root = None
+	for element in root.iter():
+		if element.tag.endswith("objects"):
+			objects_root = element
+			break
+	if objects_root is None:
+		return ([], parse_label_xml(label_xml, apply_normalization))
+
+	group_clusters: list[list[LabelObject]] = []
+	loose_objects: list[LabelObject] = []
+	for child in list(objects_root):
+		if child.tag.endswith("group"):
+			group_objects = parse_objects_in_container(child, apply_normalization)
+			if group_objects:
+				group_clusters.append(group_objects)
+			continue
+		if child.tag.endswith("text"):
+			text_object = parse_text_element(child)
+			if text_object is not None:
+				if apply_normalization:
+					text_object.text = normalize_text(text_object.text)
+				loose_objects.append(text_object)
+			continue
+		if child.tag.endswith("image"):
+			image_object = parse_image_element(child)
+			if image_object is not None:
+				loose_objects.append(image_object)
+			continue
+		if child.tag.endswith("poly"):
+			poly_object = parse_poly_element(child)
+			if poly_object is not None:
+				loose_objects.append(poly_object)
+	return (group_clusters, loose_objects)
+
+
+#============================================
+def compute_gap_threshold(
+	objects: list[LabelObject],
+	min_threshold: float,
+	axis: str = "x",
+) -> float:
 	"""
 	Compute a gap threshold from object spacing.
 
 	Args:
 		objects: List of LabelObject entries.
 		min_threshold: Minimum gap threshold.
+		axis: Axis to analyze ("x" or "y").
 
 	Returns:
 		Gap threshold in points.
 	"""
 	if len(objects) < 2:
 		return min_threshold
-	objects_sorted = sorted(objects, key=lambda item: item.x)
+
+	use_x = axis != "y"
+	objects_sorted = sorted(objects, key=lambda item: item.x if use_x else item.y)
 	gaps: list[float] = []
 	for index in range(1, len(objects_sorted)):
 		prev = objects_sorted[index - 1]
 		cur = objects_sorted[index]
-		prev_end = prev.x + prev.width
-		gap = cur.x - prev_end
+		prev_end = (prev.x + prev.width) if use_x else (prev.y + prev.height)
+		cur_start = cur.x if use_x else cur.y
+		gap = cur_start - prev_end
 		if gap > 0:
 			gaps.append(gap)
 	if not gaps:
@@ -420,20 +558,23 @@ def compute_gap_threshold(objects: list[LabelObject], min_threshold: float) -> f
 def cluster_objects(
 	objects: list[LabelObject],
 	gap_threshold: float,
+	axis: str = "x",
 ) -> list[list[LabelObject]]:
 	"""
-	Group objects into clusters based on horizontal gaps.
+	Group objects into clusters based on axis gaps.
 
 	Args:
 		objects: List of LabelObject entries.
 		gap_threshold: Gap threshold in points.
+		axis: Axis to cluster by ("x" or "y").
 
 	Returns:
 		List of object clusters.
 	"""
 	if not objects:
 		return []
-	objects_sorted = sorted(objects, key=lambda item: item.x)
+	use_x = axis != "y"
+	objects_sorted = sorted(objects, key=lambda item: item.x if use_x else item.y)
 	clusters: list[list[LabelObject]] = []
 	current: list[LabelObject] = []
 	current_max_x = None
@@ -441,20 +582,56 @@ def cluster_objects(
 	for item in objects_sorted:
 		if not current:
 			current = [item]
-			current_max_x = item.x + item.width
+			current_max_x = (item.x + item.width) if use_x else (item.y + item.height)
 			continue
-		gap = item.x - current_max_x
+		position = item.x if use_x else item.y
+		extent = (item.x + item.width) if use_x else (item.y + item.height)
+		gap = position - current_max_x
 		if gap > gap_threshold:
 			clusters.append(current)
 			current = [item]
-			current_max_x = item.x + item.width
+			current_max_x = extent
 			continue
 		current.append(item)
-		current_max_x = max(current_max_x, item.x + item.width)
+		current_max_x = max(current_max_x, extent)
 
 	if current:
 		clusters.append(current)
 	return clusters
+
+
+#============================================
+def create_label_cluster(
+	objects: list[LabelObject],
+	source_path: str,
+	index: int,
+) -> LabelCluster | None:
+	"""
+	Create a label cluster from objects.
+
+	Args:
+		objects: Label objects.
+		source_path: Source LBX path.
+		index: Cluster index.
+
+	Returns:
+		LabelCluster or None if objects are empty.
+	"""
+	if not objects:
+		return None
+	min_x = min(item.x for item in objects)
+	min_y = min(item.y for item in objects)
+	max_x = max(item.x + item.width for item in objects)
+	max_y = max(item.y + item.height for item in objects)
+	return LabelCluster(
+		source_path=source_path,
+		index=index,
+		objects=objects,
+		min_x=min_x,
+		min_y=min_y,
+		width=max_x - min_x,
+		height=max_y - min_y,
+	)
 
 
 #============================================
@@ -474,24 +651,17 @@ def build_label_clusters(
 	Returns:
 		List of LabelCluster entries.
 	"""
-	clusters = cluster_objects(objects, gap_threshold)
+	row_threshold = compute_gap_threshold(objects, DEFAULT_GAP_THRESHOLD, axis="y")
+	row_clusters = cluster_objects(objects, row_threshold, axis="y")
 	label_clusters: list[LabelCluster] = []
-	for index, cluster in enumerate(clusters, 1):
-		min_x = min(item.x for item in cluster)
-		min_y = min(item.y for item in cluster)
-		max_x = max(item.x + item.width for item in cluster)
-		max_y = max(item.y + item.height for item in cluster)
-		label_clusters.append(
-			LabelCluster(
-				source_path=source_path,
-				index=index,
-				objects=cluster,
-				min_x=min_x,
-				min_y=min_y,
-				width=max_x - min_x,
-				height=max_y - min_y,
-			)
-		)
+	cluster_index = 1
+	for row in row_clusters:
+		col_clusters = cluster_objects(row, gap_threshold, axis="x")
+		for cluster in col_clusters:
+			label_cluster = create_label_cluster(cluster, source_path, cluster_index)
+			if label_cluster is not None:
+				label_clusters.append(label_cluster)
+				cluster_index += 1
 	return label_clusters
 
 
@@ -537,6 +707,39 @@ def sanitize_token(value: str) -> str:
 
 
 #============================================
+def normalize_text(value: str) -> str:
+	"""
+	Normalize label text to ASCII for PDF fonts.
+
+	Args:
+		value: Input text.
+
+	Returns:
+		Normalized text.
+	"""
+	if not value:
+		return value
+	replacements = {
+		"\u00d7": "x",
+		"\u00f7": "/",
+		"\u00d8": "O",
+		"\u00f8": "o",
+		"\u00bd": "1/2",
+		"\u00bc": "1/4",
+		"\u00be": "3/4",
+		"\u00b0": "deg",
+		"\u2122": "TM",
+		"\u00ae": "R",
+		"\u00a0": " ",
+	}
+	for old, new in replacements.items():
+		value = value.replace(old, new)
+	value = unicodedata.normalize("NFKD", value)
+	value = value.encode("ascii", "ignore").decode("ascii")
+	return value
+
+
+#============================================
 def gather_lbx_paths(inputs: list[str]) -> list[pathlib.Path]:
 	"""
 	Gather LBX paths from input paths.
@@ -563,6 +766,8 @@ def gather_lbx_paths(inputs: list[str]) -> list[pathlib.Path]:
 def collect_labels(
 	paths: list[pathlib.Path],
 	gap_threshold: float | None,
+	apply_normalization: bool,
+	max_labels: int | None = None,
 ) -> tuple[list[LabelCluster], dict[str, int], dict[str, str], dict[str, float]]:
 	"""
 	Collect label clusters from LBX files.
@@ -570,6 +775,7 @@ def collect_labels(
 	Args:
 		paths: LBX file paths.
 		gap_threshold: Optional gap threshold override.
+		max_labels: Optional limit on total labels.
 
 	Returns:
 		Tuple of (labels, counts by file, hashes, thresholds by file).
@@ -579,18 +785,48 @@ def collect_labels(
 	hashes: dict[str, str] = {}
 	thresholds: dict[str, float] = {}
 
+	remaining_labels = max_labels
 	for path in paths:
+		if remaining_labels is not None and remaining_labels <= 0:
+			break
 		with zipfile.ZipFile(path, "r") as archive:
 			label_xml = archive.read("label.xml")
-		objects = parse_label_xml(label_xml)
+		group_clusters, loose_objects = parse_label_xml_with_groups(label_xml, apply_normalization)
+		label_clusters: list[LabelCluster] = []
+
+		cluster_index = 1
+		for group_objects in group_clusters:
+			has_visual = any(obj.kind in ("text", "image") for obj in group_objects)
+			if not has_visual:
+				continue
+			label_cluster = create_label_cluster(group_objects, str(path), cluster_index)
+			if label_cluster is not None:
+				label_clusters.append(label_cluster)
+				cluster_index += 1
+
+		visual_objects = [obj for obj in loose_objects if obj.kind in ("text", "image")]
 		threshold = gap_threshold
 		if threshold is None:
-			threshold = compute_gap_threshold(objects, DEFAULT_GAP_THRESHOLD)
+			threshold = compute_gap_threshold(visual_objects, DEFAULT_GAP_THRESHOLD)
 		thresholds[str(path)] = threshold
-		clusters = build_label_clusters(objects, str(path), threshold)
-		counts_by_file[str(path)] = len(clusters)
-		labels.extend(clusters)
+
+		loose_clusters = build_label_clusters(visual_objects, str(path), threshold)
+		for cluster in loose_clusters:
+			has_visual = any(obj.kind in ("text", "image") for obj in cluster.objects)
+			if not has_visual:
+				continue
+			cluster.index = cluster_index
+			cluster_index += 1
+			label_clusters.append(cluster)
+
+		if remaining_labels is not None and len(label_clusters) > remaining_labels:
+			label_clusters = label_clusters[:remaining_labels]
+
+		counts_by_file[str(path)] = len(label_clusters)
+		labels.extend(label_clusters)
 		hashes[str(path)] = compute_sha256(path)
+		if remaining_labels is not None:
+			remaining_labels -= len(label_clusters)
 
 	return (labels, counts_by_file, hashes, thresholds)
 
@@ -622,6 +858,11 @@ def map_font_name(font_name: str, weight: int, italic: bool) -> str:
 def draw_text_object(
 	pdf: reportlab.pdfgen.canvas.Canvas,
 	obj: LabelObject,
+	text_align_horizontal: str | None = None,
+	text_align_vertical: str | None = None,
+	font_size_override: float | None = None,
+	font_weight_override: int | None = None,
+	text_fit: bool = False,
 ) -> None:
 	"""
 	Draw a text object onto the PDF canvas.
@@ -630,8 +871,13 @@ def draw_text_object(
 		pdf: ReportLab canvas.
 		obj: LabelObject to draw.
 	"""
-	font_name = map_font_name(obj.font_name, obj.font_weight, obj.font_italic)
+	font_weight = obj.font_weight
+	if font_weight_override is not None:
+		font_weight = font_weight_override
+	font_name = map_font_name(obj.font_name, font_weight, obj.font_italic)
 	font_size = obj.font_size
+	if font_size_override is not None:
+		font_size = font_size_override
 	pdf.setFont(font_name, font_size)
 
 	color = parse_hex_color(obj.text_color)
@@ -642,18 +888,35 @@ def draw_text_object(
 	if not lines:
 		return
 
-	leading = font_size * 1.2
-	text_height = leading * len(lines)
-
 	align_h = obj.align_horizontal.upper()
 	align_v = obj.align_vertical.upper()
+	if text_align_horizontal is not None:
+		align_h = text_align_horizontal.upper()
+	if text_align_vertical is not None:
+		align_v = text_align_vertical.upper()
+
+	def compute_leading(size: float) -> float:
+		return size * 1.2
+
+	leading = compute_leading(font_size)
+	text_height = font_size + leading * (len(lines) - 1)
+	max_width = max(pdf.stringWidth(line, font_name, font_size) for line in lines)
+	if text_fit and font_size_override is not None and (max_width > obj.width or text_height > obj.height):
+		scale_width = obj.width / max_width if max_width > 0 else 1.0
+		scale_height = obj.height / text_height if text_height > 0 else 1.0
+		scale = min(1.0, scale_width, scale_height)
+		if scale < 1.0:
+			font_size *= scale
+			pdf.setFont(font_name, font_size)
+			leading = compute_leading(font_size)
+			text_height = font_size + leading * (len(lines) - 1)
 
 	if align_v == "CENTER":
-		base_y = obj.y + (obj.height - text_height) / 2.0 + font_size
+		base_y = obj.y + (obj.height - text_height) / 2.0
 	elif align_v == "BOTTOM":
-		base_y = obj.y + (obj.height - text_height) + font_size
+		base_y = obj.y
 	else:
-		base_y = obj.y + font_size
+		base_y = obj.y + obj.height - text_height
 
 	for index, line in enumerate(lines):
 		line_width = pdf.stringWidth(line, font_name, font_size)
@@ -769,8 +1032,8 @@ def draw_label_cluster(
 	scale = min(available_width / cluster.width, available_height / cluster.height)
 	scaled_width = cluster.width * scale
 	scaled_height = cluster.height * scale
-	offset_x = (available_width - scaled_width) / 2.0
-	offset_y = (available_height - scaled_height) / 2.0
+	offset_x = compute_align_offset(available_width, scaled_width, config.cluster_align_horizontal)
+	offset_y = compute_align_offset(available_height, scaled_height, config.cluster_align_vertical)
 
 	base_x = cell_x + config.inset + offset_x
 	base_y = cell_y + config.inset + offset_y
@@ -790,7 +1053,15 @@ def draw_label_cluster(
 				width=obj.width * scale,
 				height=obj.height * scale,
 			)
-			draw_text_object(pdf, new_obj)
+			draw_text_object(
+				pdf,
+				new_obj,
+				text_align_horizontal=config.text_align_horizontal,
+				text_align_vertical=config.text_align_vertical,
+				font_size_override=config.text_font_size,
+				font_weight_override=config.text_font_weight,
+				text_fit=config.text_fit,
+			)
 			continue
 		if obj.kind == "image":
 			key = (cluster.source_path, obj.image_name)
@@ -842,8 +1113,10 @@ def draw_cluster_to_tile(
 	scale = min(available_width / cluster.width, available_height / cluster.height)
 	scaled_width = cluster.width * scale
 	scaled_height = cluster.height * scale
-	base_x = config.inset + (available_width - scaled_width) / 2.0
-	base_y = config.inset + (available_height - scaled_height) / 2.0
+	offset_x = compute_align_offset(available_width, scaled_width, config.cluster_align_horizontal)
+	offset_y = compute_align_offset(available_height, scaled_height, config.cluster_align_vertical)
+	base_x = config.inset + offset_x
+	base_y = config.inset + offset_y
 
 	def transform_x(value: float) -> float:
 		return base_x + (value - cluster.min_x) * scale
@@ -860,7 +1133,15 @@ def draw_cluster_to_tile(
 				width=obj.width * scale,
 				height=obj.height * scale,
 			)
-			draw_text_object(pdf, new_obj)
+			draw_text_object(
+				pdf,
+				new_obj,
+				text_align_horizontal=config.text_align_horizontal,
+				text_align_vertical=config.text_align_vertical,
+				font_size_override=config.text_font_size,
+				font_weight_override=config.text_font_weight,
+				text_fit=config.text_fit,
+			)
 			continue
 		if obj.kind == "image":
 			key = (cluster.source_path, obj.image_name)
@@ -1083,64 +1364,6 @@ def render_tiles(
 	return tiles
 
 
-#============================================
-def write_tiles_manifest(
-	manifest_path: pathlib.Path,
-	tiles: list[dict[str, str]],
-	counts_by_file: dict[str, int],
-	hashes: dict[str, str],
-	thresholds: dict[str, float],
-	tile_config: TileConfig,
-) -> None:
-	"""
-	Write a tile manifest JSON file.
-
-	Args:
-		manifest_path: Output path.
-		tiles: Tile metadata.
-		counts_by_file: Label counts by file.
-		hashes: SHA256 hashes by file.
-		thresholds: Gap thresholds by file.
-		tile_config: Tile configuration.
-	"""
-	data = {
-		"tiles": tiles,
-		"label_counts": counts_by_file,
-		"lbx_hashes": hashes,
-		"gap_thresholds": thresholds,
-		"tile_config": {
-			"label_width": tile_config.label_width,
-			"label_height": tile_config.label_height,
-			"inset": tile_config.inset,
-		},
-	}
-	with manifest_path.open("w", encoding="utf-8") as handle:
-		json.dump(data, handle, indent=2, sort_keys=True)
-
-
-#============================================
-def gather_tile_paths(inputs: list[str]) -> list[pathlib.Path]:
-	"""
-	Gather tile PDF paths from inputs.
-
-	Args:
-		inputs: Input paths.
-
-	Returns:
-		Sorted list of PDF file paths.
-	"""
-	paths: list[pathlib.Path] = []
-	for entry in inputs:
-		path = pathlib.Path(entry).expanduser().resolve()
-		if path.is_dir():
-			paths.extend(sorted(path.rglob("*.pdf")))
-			continue
-		if path.is_file() and path.suffix.lower() == ".pdf":
-			paths.append(path)
-	return sorted(paths)
-
-
-#============================================
 def build_outline_overlay(config: ImpositionConfig) -> pypdf.PageObject:
 	"""
 	Build a PDF overlay page with label outlines.
@@ -1228,6 +1451,10 @@ def impose_tiles(
 	labels_per_page = config.columns * config.rows
 
 	tiles_to_print = len(tile_paths)
+	if config.max_labels is not None:
+		tiles_to_print = min(tiles_to_print, config.max_labels)
+	if config.max_pages is not None:
+		tiles_to_print = min(tiles_to_print, config.max_pages * labels_per_page)
 	if not config.include_partial:
 		tiles_to_print = (tiles_to_print // labels_per_page) * labels_per_page
 
@@ -1339,6 +1566,8 @@ def write_manifest(
 			"x_scale": config.x_scale,
 			"y_scale": config.y_scale,
 			"draw_outlines": config.draw_outlines,
+			"max_pages": config.max_pages,
+			"max_labels": config.max_labels,
 		},
 		"fonts": {
 			"regular": DEFAULT_FONT_REGULAR,
@@ -1363,32 +1592,57 @@ def build_config(args: argparse.Namespace) -> ImpositionConfig:
 	Returns:
 		ImpositionConfig.
 	"""
-	label_width = inches_to_points(args.label_width)
-	label_height = inches_to_points(args.label_height)
-	left_margin = inches_to_points(args.left_margin)
-	top_margin = inches_to_points(args.top_margin)
-	h_gap = inches_to_points(args.h_gap)
-	v_gap = inches_to_points(args.v_gap)
-	inset_value = getattr(args, "inset", DEFAULT_INSET / POINTS_PER_INCH)
-	inset = inches_to_points(inset_value)
-
 	config = ImpositionConfig(
-		label_width=label_width,
-		label_height=label_height,
+		label_width=DEFAULT_LABEL_WIDTH,
+		label_height=DEFAULT_LABEL_HEIGHT,
 		columns=COLUMNS,
 		rows=ROWS,
-		left_margin=left_margin,
-		top_margin=top_margin,
-		h_gap=h_gap,
-		v_gap=v_gap,
-		inset=inset,
-		x_scale=args.x_scale,
-		y_scale=args.y_scale,
+		left_margin=DEFAULT_LEFT_MARGIN,
+		top_margin=DEFAULT_TOP_MARGIN,
+		h_gap=DEFAULT_H_GAP,
+		v_gap=DEFAULT_V_GAP,
+		inset=DEFAULT_INSET,
+		x_scale=1.0,
+		y_scale=1.0,
 		include_partial=args.include_partial,
 		calibration=args.calibration,
 		draw_outlines=args.draw_outlines,
+		max_pages=args.max_pages,
+		max_labels=args.max_labels,
+		cluster_align_horizontal="CENTER",
+		cluster_align_vertical="CENTER",
+		text_align_horizontal=None,
+		text_align_vertical=None,
+		text_font_size=None,
+		text_font_weight=None,
+		text_fit=True,
 	)
 	return config
+
+
+#============================================
+def build_tile_config(args: argparse.Namespace) -> TileConfig:
+	"""
+	Build tile config from CLI args.
+
+	Args:
+		args: Parsed argparse namespace.
+
+	Returns:
+		TileConfig.
+	"""
+	return TileConfig(
+		label_width=DEFAULT_LABEL_WIDTH,
+		label_height=DEFAULT_LABEL_HEIGHT,
+		inset=DEFAULT_INSET,
+		cluster_align_horizontal="CENTER",
+		cluster_align_vertical="CENTER",
+		text_align_horizontal=None,
+		text_align_vertical=None,
+		text_font_size=None,
+		text_font_weight=None,
+		text_fit=True,
+	)
 
 
 #============================================
@@ -1400,99 +1654,71 @@ def parse_args() -> argparse.Namespace:
 		Parsed argparse namespace.
 	"""
 	parser = argparse.ArgumentParser(description="Convert LBX files to Avery 5167 PDF sheets.")
-	subparsers = parser.add_subparsers(dest="command", required=True)
+	parser.add_argument("inputs", nargs="+", help="LBX files or directories.")
 
-	tiles = subparsers.add_parser("tiles", help="Render LBX labels into tile PDFs.")
-	tiles.add_argument("inputs", nargs="+", help="LBX files or directories.")
-	tiles.add_argument("--tiles-dir", required=True, help="Output directory for tile PDFs.")
-	tiles.add_argument("--manifest", required=True, help="Tile manifest JSON path.")
-	tiles.add_argument("--gap-threshold", type=float, default=None, help="Gap threshold in points.")
-	tiles.add_argument("--label-width", type=float, default=1.7493, help="Label width in inches.")
-	tiles.add_argument("--label-height", type=float, default=0.4993, help="Label height in inches.")
-	tiles.add_argument("--inset", type=float, default=0.02, help="Inset in inches.")
+	output_group = parser.add_argument_group("Output")
+	output_group.add_argument("-o", "--output", dest="output_path", required=True, help="Output PDF path.")
+	output_group.add_argument("-m", "--manifest", dest="manifest_path", default=None, help="Output manifest JSON path.")
 
-	impose = subparsers.add_parser("impose", help="Impose tile PDFs onto Avery 5167 sheets.")
-	impose.add_argument("inputs", nargs="+", help="Tile PDF files or directories.")
-	impose.add_argument("--tiles-manifest", help="Tile manifest JSON path for ordering.")
-	impose.add_argument("--output", required=True, help="Output PDF path.")
-	impose.add_argument("--manifest", help="Output manifest JSON path.")
-	impose.add_argument("--include-partial", action="store_true", help="Include partial final page.")
-	impose.add_argument("--calibration", action="store_true", help="Add calibration page.")
-	impose.add_argument("--draw-outlines", action="store_true", help="Draw sticker outlines.")
-	impose.add_argument("--label-width", type=float, default=1.7493, help="Label width in inches.")
-	impose.add_argument("--label-height", type=float, default=0.4993, help="Label height in inches.")
-	impose.add_argument("--left-margin", type=float, default=0.3, help="Left margin in inches.")
-	impose.add_argument("--top-margin", type=float, default=0.5014, help="Top margin in inches.")
-	impose.add_argument("--h-gap", type=float, default=0.3007, help="Horizontal gap in inches.")
-	impose.add_argument("--v-gap", type=float, default=0.0021, help="Vertical gap in inches.")
-	impose.add_argument("--x-scale", type=float, default=1.0, help="Horizontal scale for placement.")
-	impose.add_argument("--y-scale", type=float, default=1.0, help="Vertical scale for placement.")
+	behavior_group = parser.add_argument_group("Behavior")
+	behavior_group.add_argument("-d", "--draw-outlines", dest="draw_outlines", action="store_true", help="Draw sticker outlines.")
+	behavior_group.add_argument("-D", "--no-draw-outlines", dest="draw_outlines", action="store_false", help="Disable sticker outlines.")
+	behavior_group.add_argument("-c", "--calibration", dest="calibration", action="store_true", help="Add a calibration page.")
+	behavior_group.add_argument("-C", "--no-calibration", dest="calibration", action="store_false", help="Disable calibration page.")
+	behavior_group.add_argument("-p", "--include-partial", dest="include_partial", action="store_true", help="Include a partial final page.")
+	behavior_group.add_argument("-P", "--no-include-partial", dest="include_partial", action="store_false", help="Exclude partial final page.")
+	behavior_group.add_argument("-n", "--normalize-text", dest="normalize_text", action="store_true", help="Normalize text to ASCII.")
+	behavior_group.add_argument("-N", "--no-normalize-text", dest="normalize_text", action="store_false", help="Preserve original text.")
 
-	return parser.parse_args()
+	limit_group = parser.add_argument_group("Limits")
+	limit_group.add_argument("-g", "--max-pages", dest="max_pages", type=int, default=None, help="Limit number of label pages.")
+	limit_group.add_argument("-l", "--max-labels", dest="max_labels", type=int, default=None, help="Limit number of labels.")
+
+	parser.set_defaults(
+		draw_outlines=False,
+		calibration=False,
+		include_partial=False,
+		normalize_text=True,
+	)
+
+	args = parser.parse_args()
+	return args
 
 
 #============================================
-def run_tiles(args: argparse.Namespace) -> None:
+def run_pipeline(args: argparse.Namespace) -> None:
 	"""
-	Run tiles command.
+	Run the full pipeline from LBX input to Avery output.
 
 	Args:
 		args: Parsed argparse namespace.
 	"""
 	paths = gather_lbx_paths(args.inputs)
-	labels, counts_by_file, hashes, thresholds = collect_labels(paths, args.gap_threshold)
+	labels, counts_by_file, hashes, thresholds = collect_labels(
+		paths,
+		None,
+		args.normalize_text,
+		args.max_labels,
+	)
 	image_cache = build_image_cache(paths)
-	tile_config = TileConfig(
-		label_width=inches_to_points(args.label_width),
-		label_height=inches_to_points(args.label_height),
-		inset=inches_to_points(args.inset),
-	)
-	tiles = render_tiles(
-		labels,
-		pathlib.Path(args.tiles_dir),
-		tile_config,
-		image_cache,
-		hashes,
-	)
-	write_tiles_manifest(
-		pathlib.Path(args.manifest),
-		tiles,
-		counts_by_file,
-		hashes,
-		thresholds,
-		tile_config,
-	)
+	tile_config = build_tile_config(args)
+	output_path = pathlib.Path(args.output_path)
+	tiles_dir = output_path.parent / "tiles"
+	tiles = render_tiles(labels, tiles_dir, tile_config, image_cache, hashes)
 
-
-#============================================
-def run_impose(args: argparse.Namespace) -> None:
-	"""
-	Run impose command.
-
-	Args:
-		args: Parsed argparse namespace.
-	"""
-	if args.tiles_manifest:
-		manifest_path = pathlib.Path(args.tiles_manifest)
-		with manifest_path.open("r", encoding="utf-8") as handle:
-			data = json.load(handle)
-		tile_paths = [pathlib.Path(tile["path"]) for tile in data.get("tiles", [])]
-	else:
-		tile_paths = gather_tile_paths(args.inputs)
-
+	tile_paths = [pathlib.Path(tile["path"]) for tile in tiles]
 	config = build_config(args)
-	output_path = pathlib.Path(args.output)
 	result = impose_tiles(tile_paths, output_path, config)
 
-	manifest_path = args.manifest
+	manifest_path = args.manifest_path
 	if manifest_path is None:
 		manifest_path = f"{output_path}.json"
 	write_manifest(
 		pathlib.Path(manifest_path),
-		tile_paths,
-		{},
-		{},
-		{},
+		paths,
+		counts_by_file,
+		hashes,
+		thresholds,
 		result,
 		config,
 	)
@@ -1504,13 +1730,7 @@ def main() -> None:
 	Main entry point.
 	"""
 	args = parse_args()
-	if args.command == "tiles":
-		run_tiles(args)
-		return
-	if args.command == "impose":
-		run_impose(args)
-		return
-	raise ValueError(f"Unknown command: {args.command}")
+	run_pipeline(args)
 
 
 if __name__ == "__main__":
