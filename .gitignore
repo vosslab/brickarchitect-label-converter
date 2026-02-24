@@ -1,3 +1,4 @@
+__pycache__/
 output/
 report_shebang.txt
 report_pyflakes.txt
