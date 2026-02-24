@@ -65,6 +65,7 @@ def build_config(args: argparse.Namespace) -> ImpositionConfig:
 		text_font_size=None,
 		text_font_weight=None,
 		text_fit=True,
+		dynamic_tag_spacing=args.dynamic_tag_spacing,
 	)
 	return config
 
@@ -91,6 +92,7 @@ def build_tile_config(args: argparse.Namespace) -> TileConfig:
 		text_font_size=DEFAULT_TEXT_SIZE,
 		text_font_weight=DEFAULT_TEXT_WEIGHT,
 		text_fit=True,
+		dynamic_tag_spacing=args.dynamic_tag_spacing,
 	)
 
 
@@ -119,6 +121,18 @@ def parse_args() -> argparse.Namespace:
 	behavior_group.add_argument("-n", "--normalize-text", dest="normalize_text", action="store_true", help="Normalize text to ASCII.")
 	behavior_group.add_argument("-N", "--no-normalize-text", dest="normalize_text", action="store_false", help="Preserve original text.")
 	behavior_group.add_argument(
+		"--dynamic-tag-spacing",
+		dest="dynamic_tag_spacing",
+		action="store_true",
+		help="Dynamically allocate space between image and text based on content.",
+	)
+	behavior_group.add_argument(
+		"--no-dynamic-tag-spacing",
+		dest="dynamic_tag_spacing",
+		action="store_false",
+		help="Use fixed layout from LBX source (default).",
+	)
+	behavior_group.add_argument(
 		"--stop-before-rendering",
 		dest="stop_before_rendering",
 		action="store_true",
@@ -134,6 +148,7 @@ def parse_args() -> argparse.Namespace:
 		calibration=False,
 		include_partial=False,
 		normalize_text=True,
+		dynamic_tag_spacing=False,
 		stop_before_rendering=False,
 	)
 
@@ -157,6 +172,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
 	print(f"Draw outlines: {args.draw_outlines}")
 	print(f"Calibration: {args.calibration}")
 	print(f"Include partial: {args.include_partial}")
+	print(f"Dynamic tag spacing: {args.dynamic_tag_spacing}")
 	if args.max_labels is not None:
 		print(f"Max labels: {args.max_labels}")
 	if args.max_pages is not None:

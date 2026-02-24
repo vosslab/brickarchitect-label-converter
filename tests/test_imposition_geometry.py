@@ -31,6 +31,7 @@ def build_default_config() -> lbx_to_avery_5167.ImpositionConfig:
 		text_font_size=None,
 		text_font_weight=None,
 		text_fit=True,
+		dynamic_tag_spacing=False,
 	)
 
 

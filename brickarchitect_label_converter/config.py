@@ -34,6 +34,7 @@ CATEGORY_TEXT_SIZE = 11.0
 CATEGORY_TEXT_MARGIN = 2.0
 IMAGE_SCALE = 0.95
 MAX_IMAGE_UPSCALE = 2.0
+DYNAMIC_SPACING_IMAGE_TEXT_GAP = 2.0
 SEPARATOR_THICKNESS = 1.0
 SEPARATOR_MIN_LENGTH = 8.0
 BACKGROUND_SPAN_FACTOR = 1.6
@@ -95,6 +96,7 @@ class ImpositionConfig:
 	text_font_size: float | None
 	text_font_weight: int | None
 	text_fit: bool
+	dynamic_tag_spacing: bool
 
 
 @dataclasses.dataclass
@@ -109,6 +111,7 @@ class TileConfig:
 	text_font_size: float | None
 	text_font_weight: int | None
 	text_fit: bool
+	dynamic_tag_spacing: bool
 
 
 @dataclasses.dataclass

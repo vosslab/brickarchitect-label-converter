@@ -46,6 +46,7 @@ CATEGORY_TEXT_SIZE = balc.config.CATEGORY_TEXT_SIZE
 CATEGORY_TEXT_MARGIN = balc.config.CATEGORY_TEXT_MARGIN
 IMAGE_SCALE = balc.config.IMAGE_SCALE
 MAX_IMAGE_UPSCALE = balc.config.MAX_IMAGE_UPSCALE
+DYNAMIC_SPACING_IMAGE_TEXT_GAP = balc.config.DYNAMIC_SPACING_IMAGE_TEXT_GAP
 SEPARATOR_THICKNESS = balc.config.SEPARATOR_THICKNESS
 SEPARATOR_MIN_LENGTH = balc.config.SEPARATOR_MIN_LENGTH
 BACKGROUND_SPAN_FACTOR = balc.config.BACKGROUND_SPAN_FACTOR
@@ -107,6 +108,7 @@ write_label_count_log = balc.segment.write_label_count_log
 gather_lbx_paths = balc.segment.gather_lbx_paths
 collect_labels = balc.segment.collect_labels
 
+rebalance_cluster_spacing = balc.render.rebalance_cluster_spacing
 compute_align_offset = balc.render.compute_align_offset
 compute_text_bbox = balc.render.compute_text_bbox
 compute_text_visual_bounds = balc.render.compute_text_visual_bounds

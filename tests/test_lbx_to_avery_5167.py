@@ -40,6 +40,7 @@ def test_basic_brick_label_count_and_pdf(tmp_path: pathlib.Path) -> None:
 		text_font_size=None,
 		text_font_weight=None,
 		text_fit=True,
+		dynamic_tag_spacing=False,
 	)
 	result = lbx_to_avery_5167.render_labels_to_pdf(labels, [path], output_path, config)
 	assert result.printed_labels == 11

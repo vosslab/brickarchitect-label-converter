@@ -43,6 +43,144 @@ PROGRESS_BAR_WIDTH = balc.config.PROGRESS_BAR_WIDTH
 PROGRESS_UPDATE_EVERY = balc.config.PROGRESS_UPDATE_EVERY
 IMAGE_SCALE = balc.config.IMAGE_SCALE
 MAX_IMAGE_UPSCALE = balc.config.MAX_IMAGE_UPSCALE
+DYNAMIC_SPACING_IMAGE_TEXT_GAP = balc.config.DYNAMIC_SPACING_IMAGE_TEXT_GAP
+
+
+#============================================
+def rebalance_cluster_spacing(
+	cluster: LabelCluster,
+	label_width: float,
+	label_height: float,
+	inset: float,
+) -> LabelCluster:
+	"""
+	Rebalance horizontal space between image and text objects.
+
+	For clusters containing both image and text objects arranged
+	side by side, this redistributes the horizontal space so that
+	each portion gets space proportional to its content needs.
+
+	Args:
+		cluster: The label cluster to rebalance.
+		label_width: Available label width.
+		label_height: Available label height.
+		inset: Label inset.
+
+	Returns:
+		A new LabelCluster with rebalanced object positions,
+		or the original cluster if rebalancing is not applicable.
+	"""
+	images = [obj for obj in cluster.objects if obj.kind == "image"]
+	texts = [obj for obj in cluster.objects if obj.kind == "text"]
+	if not images or not texts:
+		return cluster
+
+	# Only rebalance when images are to the left of text (standard layout).
+	image_right = max(obj.x + obj.width for obj in images)
+	text_left = min(obj.x for obj in texts)
+	if image_right > text_left + cluster.width * 0.5:
+		return cluster
+
+	# Compute the current bounding boxes for image and text zones.
+	image_min_x = min(obj.x for obj in images)
+	image_max_x = max(obj.x + obj.width for obj in images)
+	image_min_y = min(obj.y for obj in images)
+	image_max_y = max(obj.y + obj.height for obj in images)
+	text_min_x = min(obj.x for obj in texts)
+	text_max_x = max(obj.x + obj.width for obj in texts)
+
+	# Current widths of each zone.
+	current_image_width = image_max_x - image_min_x
+	current_text_width = text_max_x - text_min_x
+	if current_image_width <= 0 or current_text_width <= 0:
+		return cluster
+
+	# The image's natural aspect ratio determines its ideal width given the
+	# available height.  Use the tallest image to compute the intrinsic width.
+	image_height = image_max_y - image_min_y
+	if image_height <= 0:
+		return cluster
+	image_aspect = current_image_width / image_height
+
+	# Available space for content inside the label.
+	available_width = label_width - 2.0 * inset
+	available_height = label_height - 2.0 * inset
+	if available_width <= 0 or available_height <= 0:
+		return cluster
+
+	# Determine the ideal image width if it were scaled to fill the
+	# available height, preserving its aspect ratio.
+	ideal_image_width = available_height * image_aspect
+	gap = DYNAMIC_SPACING_IMAGE_TEXT_GAP
+
+	# Clamp: image should use between 15% and 55% of the available width.
+	min_image_width = available_width * 0.15
+	max_image_width = available_width * 0.55
+	target_image_width = max(min_image_width, min(max_image_width, ideal_image_width))
+	target_text_width = available_width - target_image_width - gap
+
+	if target_text_width < available_width * 0.25:
+		return cluster
+
+	# Compute scale factors to map current zones to target sizes.
+	image_scale_x = target_image_width / current_image_width
+	text_scale_x = target_text_width / current_text_width
+
+	# Build the new object list with adjusted positions and widths.
+	new_objects: list[LabelObject] = []
+	new_image_start_x = cluster.min_x
+	new_text_start_x = cluster.min_x + target_image_width + gap
+
+	for obj in cluster.objects:
+		if obj.kind == "image":
+			rel_x = obj.x - image_min_x
+			new_obj = dataclasses.replace(
+				obj,
+				x=new_image_start_x + rel_x * image_scale_x,
+				width=obj.width * image_scale_x,
+			)
+			new_objects.append(new_obj)
+		elif obj.kind == "text":
+			rel_x = obj.x - text_min_x
+			new_obj = dataclasses.replace(
+				obj,
+				x=new_text_start_x + rel_x * text_scale_x,
+				width=obj.width * text_scale_x,
+			)
+			new_objects.append(new_obj)
+		else:
+			# Rects, polys, etc: map based on which zone they overlap.
+			obj_center_x = obj.x + obj.width / 2.0
+			if obj_center_x < (image_max_x + text_min_x) / 2.0:
+				rel_x = obj.x - image_min_x
+				new_obj = dataclasses.replace(
+					obj,
+					x=new_image_start_x + rel_x * image_scale_x,
+					width=obj.width * image_scale_x,
+				)
+			else:
+				rel_x = obj.x - text_min_x
+				new_obj = dataclasses.replace(
+					obj,
+					x=new_text_start_x + rel_x * text_scale_x,
+					width=obj.width * text_scale_x,
+				)
+			new_objects.append(new_obj)
+
+	# Recompute cluster bounds.
+	new_min_x = min(item.x for item in new_objects)
+	new_min_y = min(item.y for item in new_objects)
+	new_max_x = max(item.x + item.width for item in new_objects)
+	new_max_y = max(item.y + item.height for item in new_objects)
+	return LabelCluster(
+		source_path=cluster.source_path,
+		index=cluster.index,
+		objects=new_objects,
+		min_x=new_min_x,
+		min_y=new_min_y,
+		width=new_max_x - new_min_x,
+		height=new_max_y - new_min_y,
+	)
 
 
 #============================================
@@ -611,6 +749,11 @@ def draw_label_cluster(
 	if cluster.width <= 0 or cluster.height <= 0:
 		return
 
+	if config.dynamic_tag_spacing:
+		cluster = rebalance_cluster_spacing(
+			cluster, config.label_width, config.label_height, config.inset,
+		)
+
 	scale = min(available_width / cluster.width, available_height / cluster.height)
 	scaled_height = cluster.height * scale
 	visual_bounds = compute_visual_bounds(
@@ -737,6 +880,11 @@ def draw_cluster_to_tile(
 	available_height = config.label_height - 2.0 * config.inset
 	if cluster.width <= 0 or cluster.height <= 0:
 		return (0, 0)
+
+	if config.dynamic_tag_spacing:
+		cluster = rebalance_cluster_spacing(
+			cluster, config.label_width, config.label_height, config.inset,
+		)
 
 	scale = min(available_width / cluster.width, available_height / cluster.height)
 	scaled_height = cluster.height * scale
