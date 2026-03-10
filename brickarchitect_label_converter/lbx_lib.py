@@ -86,6 +86,7 @@ def normalize_text(value: str) -> str:
 		value = value.replace(old, new)
 	value = unicodedata.normalize("NFKD", value)
 	value = value.encode("ascii", "ignore").decode("ascii")
+	value = value.rstrip().rstrip(",").rstrip()
 	return value
 
 
