@@ -182,7 +182,7 @@ def compute_text_visual_bounds(
 			text_x = obj.x + obj.width - line_width
 		else:
 			text_x = obj.x
-		text_y = base_y + index * leading
+		text_y = base_y + (len(lines) - 1 - index) * leading
 		bbox = compute_text_bbox(text_x, text_y, line, font_name, font_size, 0.0)
 		if bounds is None:
 			bounds = bbox
@@ -354,27 +354,7 @@ def sanitize_token(value: str) -> str:
 	return sanitized
 
 
-#============================================
-def map_font_name(font_name: str, weight: int, italic: bool) -> str:
-	"""
-	Map LBX font metadata to a PDF font name.
-
-	Args:
-		font_name: LBX font name.
-		weight: Font weight.
-		italic: Italic flag.
-
-	Returns:
-		ReportLab font name.
-	"""
-	is_bold = weight >= 700
-	if italic and is_bold:
-		return DEFAULT_FONT_BOLD_ITALIC
-	if italic:
-		return DEFAULT_FONT_ITALIC
-	if is_bold:
-		return DEFAULT_FONT_BOLD
-	return DEFAULT_FONT_REGULAR
+map_font_name = balc.config.map_font_name
 
 
 #============================================
@@ -464,7 +444,7 @@ def draw_text_object(
 			text_x = obj.x + obj.width - line_width
 		else:
 			text_x = obj.x
-		text_y = base_y + index * leading
+		text_y = base_y + (len(lines) - 1 - index) * leading
 		pdf.drawString(text_x, text_y, line)
 		bboxes.append(
 			compute_text_bbox(

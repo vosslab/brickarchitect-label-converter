@@ -44,6 +44,8 @@ PAIRING_WHITELIST = balc.config.PAIRING_WHITELIST
 TEXT_MERGE_WHITELIST = balc.config.TEXT_MERGE_WHITELIST
 MULTI_IMAGE_SPLIT_WHITELIST = balc.config.MULTI_IMAGE_SPLIT_WHITELIST
 TEXT_ONLY_ADJACENT_MERGE_WHITELIST = balc.config.TEXT_ONLY_ADJACENT_MERGE_WHITELIST
+IMAGE_SCALE = balc.config.IMAGE_SCALE
+map_font_name = balc.config.map_font_name
 
 
 @dataclasses.dataclass
@@ -1273,6 +1275,154 @@ def create_label_cluster(
 
 
 #============================================
+def _compute_text_visual_bounds(obj: LabelObject) -> tuple[float, float, float, float]:
+	"""
+	Compute the visual content bounds for a text object.
+
+	Args:
+		obj: A LabelObject with kind=="text".
+
+	Returns:
+		Tuple of (x0, y0, x1, y1) representing the visual bounding box.
+	"""
+	font_name = map_font_name(obj.font_name, obj.font_weight, obj.font_italic)
+	font_size = obj.font_size
+	text = obj.text
+	lines = text.split("\n") if text else [""]
+	num_lines = len(lines)
+
+	# Compute text height: leading * (num_lines - 1) + font_size
+	leading = font_size * 1.2
+	text_height = leading * (num_lines - 1) + font_size
+
+	# Compute text width as the widest line
+	text_width = 0.0
+	for line in lines:
+		line_width = reportlab.pdfbase.pdfmetrics.stringWidth(line, font_name, font_size)
+		text_width = max(text_width, line_width)
+
+	# Position depends on alignment within the allocated box
+	align_h = obj.align_horizontal.strip().upper()
+	if align_h in ("RIGHT",):
+		x0 = obj.x + obj.width - text_width
+	elif align_h in ("CENTER",):
+		x0 = obj.x + (obj.width - text_width) / 2.0
+	else:  # LEFT or default
+		x0 = obj.x
+
+	align_v = obj.align_vertical.strip().upper()
+	if align_v in ("BOTTOM",):
+		y0 = obj.y + obj.height - text_height
+	elif align_v in ("CENTER",):
+		y0 = obj.y + (obj.height - text_height) / 2.0
+	else:  # TOP or default
+		y0 = obj.y
+
+	return (x0, y0, x0 + text_width, y0 + text_height)
+
+
+#============================================
+def tighten_cluster_bounds(cluster: LabelCluster) -> LabelCluster:
+	"""
+	Tighten cluster bounds to match actual visual content.
+
+	Recomputes the cluster bounding box based on the rendered size of each
+	object rather than the allocated LBX box. Skips clusters containing
+	rect objects (category labels with backgrounds).
+
+	Args:
+		cluster: The label cluster to tighten.
+
+	Returns:
+		A new LabelCluster with tightened bounds, or the original if
+		tightening is not worthwhile.
+	"""
+	# Skip if cluster has any rect objects (category labels with background)
+	if any(obj.kind == "rect" for obj in cluster.objects):
+		return cluster
+
+	visual_x0_list: list[float] = []
+	visual_y0_list: list[float] = []
+	visual_x1_list: list[float] = []
+	visual_y1_list: list[float] = []
+
+	for obj in cluster.objects:
+		if obj.kind == "text":
+			if not obj.text or not obj.text.strip():
+				continue
+			x0, y0, x1, y1 = _compute_text_visual_bounds(obj)
+		elif obj.kind == "image":
+			center_x = obj.x + obj.width / 2.0
+			center_y = obj.y + obj.height / 2.0
+			eff_width = obj.width * IMAGE_SCALE
+			eff_height = obj.height * IMAGE_SCALE
+			x0 = center_x - eff_width / 2.0
+			y0 = center_y - eff_height / 2.0
+			x1 = center_x + eff_width / 2.0
+			y1 = center_y + eff_height / 2.0
+		elif obj.kind == "poly":
+			if len(obj.poly_points) < 2:
+				continue
+			x_values = [p[0] for p in obj.poly_points]
+			y_values = [p[1] for p in obj.poly_points]
+			x0, y0, x1, y1 = min(x_values), min(y_values), max(x_values), max(y_values)
+		else:
+			# Unknown kind - use allocated box
+			x0, y0 = obj.x, obj.y
+			x1, y1 = obj.x + obj.width, obj.y + obj.height
+
+		visual_x0_list.append(x0)
+		visual_y0_list.append(y0)
+		visual_x1_list.append(x1)
+		visual_y1_list.append(y1)
+
+	if not visual_x0_list:
+		return cluster
+
+	# Union all visual bounds
+	content_x0 = min(visual_x0_list)
+	content_y0 = min(visual_y0_list)
+	content_x1 = max(visual_x1_list)
+	content_y1 = max(visual_y1_list)
+
+	# Add 1pt padding on each side
+	content_x0 -= 1.0
+	content_y0 -= 1.0
+	content_x1 += 1.0
+	content_y1 += 1.0
+
+	# Clamp: never expand beyond original cluster bounds
+	orig_x0 = cluster.min_x
+	orig_y0 = cluster.min_y
+	orig_x1 = cluster.min_x + cluster.width
+	orig_y1 = cluster.min_y + cluster.height
+
+	new_x0 = max(content_x0, orig_x0)
+	new_y0 = max(content_y0, orig_y0)
+	new_x1 = min(content_x1, orig_x1)
+	new_y1 = min(content_y1, orig_y1)
+
+	new_width = new_x1 - new_x0
+	new_height = new_y1 - new_y0
+
+	# If savings < 2pt on both axes, not worth the rounding risk
+	width_savings = cluster.width - new_width
+	height_savings = cluster.height - new_height
+	if width_savings < 2.0 and height_savings < 2.0:
+		return cluster
+
+	return LabelCluster(
+		source_path=cluster.source_path,
+		index=cluster.index,
+		objects=cluster.objects,
+		min_x=new_x0,
+		min_y=new_y0,
+		width=new_width,
+		height=new_height,
+	)
+
+
+#============================================
 def build_label_clusters(
 	objects: list[LabelObject],
 	source_path: str,
@@ -1845,6 +1995,7 @@ def collect_labels(
 		if remaining_labels is not None and len(label_clusters) > remaining_labels:
 			label_clusters = label_clusters[:remaining_labels]
 
+		label_clusters = [tighten_cluster_bounds(c) for c in label_clusters]
 		counts_by_file[str(path)] = len(label_clusters)
 		labels.extend(label_clusters)
 		hashes[str(path)] = compute_sha256(path)

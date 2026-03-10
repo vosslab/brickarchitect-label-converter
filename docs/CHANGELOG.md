@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-03-10
+- Tighten cluster bounds to visual content for larger rendered labels.
+- Fix multiline text rendering order so lines display top-to-bottom instead of reversed.
+
 ## 2026-02-05
 - Add tile and imposition limits for faster test runs (`--max-labels`, `--max-pages`).
 - Record imposition and tile limits in manifests.

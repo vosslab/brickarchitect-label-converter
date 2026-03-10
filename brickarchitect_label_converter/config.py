@@ -121,6 +121,29 @@ class ImpositionResult:
 
 
 #============================================
+def map_font_name(font_name: str, weight: int, italic: bool) -> str:
+	"""
+	Map LBX font metadata to a PDF font name.
+
+	Args:
+		font_name: LBX font name.
+		weight: Font weight.
+		italic: Italic flag.
+
+	Returns:
+		ReportLab font name.
+	"""
+	is_bold = weight >= 700
+	if italic and is_bold:
+		return DEFAULT_FONT_BOLD_ITALIC
+	if italic:
+		return DEFAULT_FONT_ITALIC
+	if is_bold:
+		return DEFAULT_FONT_BOLD
+	return DEFAULT_FONT_REGULAR
+
+
+#============================================
 def inches_to_points(value: float) -> float:
 	"""
 	Convert inches to points.
