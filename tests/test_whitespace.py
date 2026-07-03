@@ -1,115 +1,48 @@
+"""Repo-wide whitespace hygiene: BOM, CRLF, trailing whitespace, missing final newline."""
+
+# Standard Library
 import os
-import subprocess
 
-import git_file_utils
-from get_repo_root import get_repo_root
+# PIP3 modules
+import pytest
 
+# local repo modules
+import file_utils
 
-SCOPE_ENV = "REPO_HYGIENE_SCOPE"
-FAST_ENV = "FAST_REPO_HYGIENE"
-SKIP_ENV = "SKIP_REPO_HYGIENE"
-REPO_ROOT = get_repo_root()
+# Text-format extensions that the whitespace hygiene check scans.
+EXTENSIONS = (
+	".md", ".txt", ".py", ".sh", ".bash", ".zsh",
+	".yml", ".yaml", ".json", ".toml", ".ini", ".cfg", ".conf",
+	".csv", ".tsv", ".html", ".htm", ".css",
+)
 
-EXTENSIONS = {
-	".md",
-	".txt",
-	".py",
-	".sh",
-	".bash",
-	".zsh",
-	".yml",
-	".yaml",
-	".json",
-	".toml",
-	".ini",
-	".cfg",
-	".conf",
-	".csv",
-	".tsv",
-	".html",
-	".htm",
-	".css",
-}
-SKIP_DIRS = {".git", ".venv", "old_shell_folder"}
+FILES = file_utils.discover_files(extensions=EXTENSIONS, test_key="whitespace")
+
+REPORT_NAME = file_utils.report_name(__file__)
+
+HEADER = "whitespace violations"
+
+# Module-level dict of repo-relative POSIX key -> list of violation lines.
+# Populated by the autouse collect_report fixture before any test runs.
+VIOLATIONS_BY_FILE: dict[str, list[str]] = {}
 
 
 #============================================
-def resolve_scope() -> str:
-	"""Resolve the scan scope from environment.
+def _check_whitespace_bytes(data: bytes) -> list[str]:
+	"""
+	Detect whitespace issues in raw file bytes.
+
+	Checks for UTF-8 BOM, CRLF or bare CR line endings, trailing whitespace on
+	any line, and a missing final newline. Returns short label strings for each
+	issue found, matching the original violation wording.
+
+	Args:
+		data: Raw bytes content of a file.
 
 	Returns:
-		str: "all" or "changed".
+		list[str]: Issue labels found (empty when the file is clean).
 	"""
-	scope = os.environ.get(SCOPE_ENV, "").strip().lower()
-	if not scope and os.environ.get(FAST_ENV) == "1":
-		scope = "changed"
-	if scope in ("all", "changed"):
-		return scope
-	return "all"
-
-
-#============================================
-def path_has_skip_dir(repo_root: str, path: str) -> bool:
-	"""Check whether a path includes a skipped directory."""
-	rel_path = os.path.relpath(path, repo_root)
-	if rel_path.startswith(".."):
-		return True
-	parts = rel_path.split(os.sep)
-	for part in parts:
-		if part in SKIP_DIRS:
-			return True
-	return False
-
-
-#============================================
-def filter_files(repo_root: str, paths: list[str]) -> list[str]:
-	"""Filter candidate paths by extension and skip rules."""
-	matches = []
-	seen = set()
-	for path in paths:
-		abs_path = path
-		if not os.path.isabs(abs_path):
-			abs_path = os.path.join(repo_root, path)
-		abs_path = os.path.abspath(abs_path)
-		if abs_path in seen:
-			continue
-		seen.add(abs_path)
-		if path_has_skip_dir(repo_root, abs_path):
-			continue
-		if not os.path.isfile(abs_path):
-			continue
-		ext = os.path.splitext(abs_path)[1].lower()
-		if ext not in EXTENSIONS:
-			continue
-		matches.append(abs_path)
-	matches.sort()
-	return matches
-
-
-#============================================
-def gather_files(repo_root: str) -> list[str]:
-	"""Collect tracked files to scan."""
-	tracked_paths = []
-	for path in git_file_utils.list_tracked_files(repo_root):
-		tracked_paths.append(os.path.join(repo_root, path))
-	return filter_files(repo_root, tracked_paths)
-
-
-#============================================
-def gather_changed_files(repo_root: str) -> list[str]:
-	"""Collect changed files using git diff and index lists."""
-	changed_paths = []
-	for path in git_file_utils.list_changed_files(repo_root):
-		changed_paths.append(os.path.join(repo_root, path))
-	return filter_files(repo_root, changed_paths)
-
-
-#============================================
-def check_whitespace(path: str) -> list[str]:
-	"""Check one file for whitespace issues."""
 	issues = []
-	with open(path, "rb") as handle:
-		data = handle.read()
 	if data.startswith(b"\xef\xbb\xbf"):
 		issues.append("utf-8 BOM")
 	if b"\r\n" in data:
@@ -117,6 +50,7 @@ def check_whitespace(path: str) -> list[str]:
 	elif b"\r" in data:
 		issues.append("CR line endings")
 
+	# Normalize line endings for trailing-whitespace and final-newline checks.
 	normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 	for line in normalized.split(b"\n"):
 		if line.endswith(b" ") or line.endswith(b"\t"):
@@ -129,53 +63,94 @@ def check_whitespace(path: str) -> list[str]:
 
 
 #============================================
-def run_fixer(path: str) -> None:
-	"""Run fix_whitespace.py on a file."""
-	script_path = os.path.join(REPO_ROOT, "tests", "fix_whitespace.py")
-	if not os.path.isfile(script_path):
-		script_path = os.path.join(os.path.dirname(__file__), "fix_whitespace.py")
-	result = subprocess.run(
-		["python3", script_path, "-i", path],
-		capture_output=True,
-		text=True,
-		cwd=REPO_ROOT,
-	)
-	if result.returncode != 0:
-		message = result.stderr.strip() or "Whitespace fixer failed."
-		raise AssertionError(message)
+def check_file(rel: str) -> list[str]:
+	"""
+	Check one file for whitespace issues and return formatted violation lines.
+
+	Resolves the repo-relative path to an absolute path, reads the raw bytes,
+	and delegates to _check_whitespace_bytes. Returns a single formatted line
+	when issues are found so collect_file_violations can store it.
+
+	Args:
+		rel: Repo-relative POSIX path of the file to check.
+
+	Returns:
+		list[str]: Single-element list with the formatted violation line, or
+			empty list when the file is clean.
+	"""
+	# Resolve the absolute path from the repo-relative path.
+	abs_path = os.path.join(file_utils.get_repo_root(), rel)
+	with open(abs_path, "rb") as handle:
+		data = handle.read()
+	issues = _check_whitespace_bytes(data)
+	if not issues:
+		return []
+	# Format matches original: "rel: issue1, issue2" in sorted order.
+	violation_line = f"{rel}: " + ", ".join(sorted(set(issues)))
+	return [violation_line]
 
 
 #============================================
-def test_whitespace_hygiene(pytestconfig) -> None:
-	"""Fail on whitespace issues. Auto-fix unless --no-ascii-fix is set."""
-	if os.environ.get(SKIP_ENV) == "1":
-		return
+@pytest.fixture(scope="module", autouse=True)
+def collect_report(pytestconfig: pytest.Config) -> None:
+	"""
+	Autouse fixture: clear stale reports, optionally fix violating files, populate VIOLATIONS_BY_FILE.
+
+	Fixer logic runs here so it NEVER runs inside a parametrized test case.
+	For each violating file, when fixing is enabled (--no-ascii-fix not set),
+	runs fix_whitespace.py in-place then re-scans so VIOLATIONS_BY_FILE reflects
+	only remaining (unfixed) violations. Writes the report only when violations remain.
+
+	Args:
+		pytestconfig: Pytest configuration object used to resolve the fix flag.
+	"""
+	# Once-per-process guarded cleanup of repo-root report_*.txt (no-op after first call).
+	file_utils.clear_stale_reports()
+	# Clear any state left from a previous collection in the same process.
+	VIOLATIONS_BY_FILE.clear()
+
+	# Resolve whether fixes should be applied from the pytest config option.
+	# Matches the same option name and default used by test_ascii_compliance.py.
 	apply_fix = not pytestconfig.getoption("no_ascii_fix", default=False)
 
-	scope = resolve_scope()
-	if scope == "changed":
-		paths = gather_changed_files(REPO_ROOT)
-	else:
-		paths = gather_files(REPO_ROOT)
-
-	errors = []
-	to_fix = []
-	for path in paths:
-		issues = check_whitespace(path)
-		if not issues:
-			continue
-		rel_path = os.path.relpath(path, REPO_ROOT)
-		errors.append(f"{rel_path}:0:0: " + ", ".join(sorted(set(issues))))
-		to_fix.append(path)
-
-	if not errors:
-		return
+	# Initial scan: collect all files with violations.
+	initial_violations = file_utils.collect_file_violations(FILES, check_file)
 
 	if apply_fix:
-		for path in to_fix:
-			run_fixer(path)
-		raise AssertionError(
-			"Whitespace issues were fixed. Please re-run pytest.\n" + "\n".join(errors)
-		)
+		# For each violating file, run the fixer then re-scan.
+		for rel, _lines in initial_violations.items():
+			abs_path = os.path.join(file_utils.get_repo_root(), rel)
+			# run_fixer_script returns (returncode, stderr); never raises on fixer outcome.
+			returncode, stderr = file_utils.run_fixer_script("fix_whitespace.py", abs_path)
+			if returncode != 0:
+				# Non-zero exit: fixer failed; record as violation and skip re-scan.
+				VIOLATIONS_BY_FILE[rel] = [
+					f"{rel}:0:0: fixer failed (exit {returncode}): {stderr}"
+				]
+				continue
+			# Re-scan the file after the fixer has written it (exit 0 only).
+			remaining = check_file(rel)
+			if remaining:
+				# Violations persist after fix; record them.
+				VIOLATIONS_BY_FILE[rel] = remaining
+		# Files not in initial_violations are clean; they stay out of VIOLATIONS_BY_FILE.
+	else:
+		# No fixing: all initial violations become the final result.
+		VIOLATIONS_BY_FILE.update(initial_violations)
 
-	raise AssertionError("Whitespace issues found:\n" + "\n".join(errors))
+	lines = file_utils.format_violation_report(HEADER, VIOLATIONS_BY_FILE)
+	# Write only when there are violations; cleanup already removed stale reports.
+	if lines:
+		file_utils.write_report_lines(REPORT_NAME, lines)
+
+
+#============================================
+@pytest.mark.parametrize("path", FILES, ids=file_utils.rel_id)
+def test_whitespace_hygiene(path: str) -> None:
+	"""Fail on whitespace issues in tracked text files."""
+	rel = file_utils.rel_to_root(path)
+	# Python evaluates an assert's message expression ONLY when the assert fails,
+	# so format_violation_assert_message runs on the failing path only -- not per pass.
+	assert rel not in VIOLATIONS_BY_FILE, file_utils.format_violation_assert_message(
+		rel, VIOLATIONS_BY_FILE.get(rel, []), REPORT_NAME
+	)

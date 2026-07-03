@@ -1,33 +1,23 @@
+# Standard Library
+import os
 import pathlib
 import tokenize
-from typing import Optional
 
-import git_file_utils
+# PIP3 modules
+import pytest
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+# local repo modules
+import file_utils
 
+FILES = file_utils.discover_files(extensions=(".py",), test_key="indentation")
 
-#============================================
-def list_tracked_python_files() -> list[pathlib.Path]:
-	"""
-	List tracked Python files in the repo.
+REPORT_NAME = file_utils.report_name(__file__)
 
-	Returns:
-		list[pathlib.Path]: Absolute paths to tracked .py files.
-	"""
-	paths: list[pathlib.Path] = []
-	for line in git_file_utils.list_tracked_files(
-		str(REPO_ROOT),
-		patterns=["*.py"],
-		error_message="Failed to list tracked Python files.",
-	):
-		if line.startswith("old_shell_folder/"):
-			continue
-		path = REPO_ROOT / line
-		if not path.exists():
-			continue
-		paths.append(path)
-	return paths
+HEADER = "indentation violations"
+
+# Module-level dict of repo-relative POSIX key -> list of violation lines.
+# Populated by the autouse collect_report fixture before any test runs.
+VIOLATIONS_BY_FILE: dict[str, list[str]] = {}
 
 
 #============================================
@@ -57,7 +47,7 @@ def multiline_string_lines(path: pathlib.Path) -> set[int]:
 #============================================
 def inspect_file(path: pathlib.Path) -> list[int]:
 	"""
-	Check a file for mixed leading indentation.
+	Check a file for mixed leading indentation within a single line.
 
 	Args:
 		path: File path.
@@ -91,15 +81,15 @@ def inspect_file(path: pathlib.Path) -> list[int]:
 
 
 #============================================
-def summarize_indentation(path: pathlib.Path) -> Optional[tuple[int, int]]:
+def summarize_indentation(path: pathlib.Path) -> tuple[int, int] | None:
 	"""
-	Return first tab line and first space line if both exist.
+	Return first tab line and first space line if both exist in the file.
 
 	Args:
 		path: File path.
 
 	Returns:
-		Optional[tuple[int, int]]: First tab line and first space line, or None.
+		tuple[int, int] | None: First tab line and first space line, or None.
 	"""
 	ignore_lines = multiline_string_lines(path)
 	with tokenize.open(path) as handle:
@@ -131,28 +121,70 @@ def summarize_indentation(path: pathlib.Path) -> Optional[tuple[int, int]]:
 
 
 #============================================
-def test_indentation_style() -> None:
+def check_file(rel: str) -> list[str]:
 	"""
-	Fail on mixed indentation within a line or within a file.
+	Run indentation checks on one file and return any violations.
+
+	Runs inspect_file (mixed indentation within a line) and
+	summarize_indentation (tabs and spaces mixed across a file). Files with no
+	violations return an empty list. The absolute path is resolved from rel via
+	os.path.join(file_utils.get_repo_root(), rel); get_repo_root is cached so
+	resolution does not spawn a subprocess per call.
+
+	Args:
+		rel: Repo-relative POSIX path for the file to check.
+
+	Returns:
+		list[str]: Violation lines (empty when the file is clean).
 	"""
-	errors = []
-	for path in sorted(list_tracked_python_files()):
-		bad_lines = inspect_file(path)
-		if bad_lines:
-			display_path = path.relative_to(REPO_ROOT)
-			for line_number in bad_lines[:5]:
-				errors.append(
-					f"{display_path}:{line_number}: mixed indentation within line"
-				)
-			continue
-		indent_lines = summarize_indentation(path)
-		if indent_lines is not None:
-			display_path = path.relative_to(REPO_ROOT)
-			tab_line, space_line = indent_lines
-			errors.append(
-				f"{display_path}: tabs and spaces in file "
-				f"(tab line {tab_line}, space line {space_line})"
-			)
-	if errors:
-		message = "\n".join(errors)
-		raise AssertionError(f"Indentation issues found:\n{message}")
+	# Resolve the absolute path from the cached repo root.
+	abs_path = pathlib.Path(os.path.join(file_utils.get_repo_root(), rel))
+	# Check for mixed indentation within individual lines.
+	bad_lines = inspect_file(abs_path)
+	violations = []
+	if bad_lines:
+		for ln in bad_lines[:5]:
+			violations.append(f"{rel}:{ln}: mixed indentation within line")
+	# Check for tabs and spaces mixed across the whole file.
+	indent_lines = summarize_indentation(abs_path)
+	if indent_lines is not None:
+		tab_line, space_line = indent_lines
+		violations.append(
+			f"{rel}: tabs and spaces in file "
+			f"(tab line {tab_line}, space line {space_line})"
+		)
+	return violations
+
+
+#============================================
+@pytest.fixture(scope="module", autouse=True)
+def collect_report() -> None:
+	"""
+	Autouse fixture: clear stale reports, populate VIOLATIONS_BY_FILE, write report.
+
+	Runs the guarded once-per-process cleanup first, rebuilds the module-level
+	violations dict via the shared harness, then writes the report only when
+	there are violations. Cleanup owns removal of clean-run reports, so a clean
+	module writes nothing.
+	"""
+	# Once-per-process guarded cleanup of repo-root report_*.txt (no-op after first call).
+	file_utils.clear_stale_reports()
+	# Clear any state left from a previous collection in the same process.
+	VIOLATIONS_BY_FILE.clear()
+	VIOLATIONS_BY_FILE.update(file_utils.collect_file_violations(FILES, check_file))
+	lines = file_utils.format_violation_report(HEADER, VIOLATIONS_BY_FILE)
+	# Write only when there are violations; cleanup already removed stale reports.
+	if lines:
+		file_utils.write_report_lines(REPORT_NAME, lines)
+
+
+#============================================
+@pytest.mark.parametrize("path", FILES, ids=file_utils.rel_id)
+def test_indentation_style(path: str) -> None:
+	"""Fail on mixed indentation within a line or within a file."""
+	rel = file_utils.rel_to_root(path)
+	# Python evaluates an assert's message expression ONLY when the assert fails,
+	# so format_violation_assert_message runs on the failing path only -- not per pass.
+	assert rel not in VIOLATIONS_BY_FILE, file_utils.format_violation_assert_message(
+		rel, VIOLATIONS_BY_FILE.get(rel, []), REPORT_NAME
+	)
