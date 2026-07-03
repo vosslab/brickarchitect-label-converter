@@ -2,21 +2,9 @@
 
 Convert Brother P-touch LBX label sets into Avery 5167 label sheets as PDFs. This is for batch printing LEGO storage labels without wasting partial sticker sheets.
 
-## Documentation
-Getting started:
-- [docs/INSTALL.md](docs/INSTALL.md): Setup requirements and dependencies.
-- [docs/USAGE.md](docs/USAGE.md): CLI usage and examples.
-
-Workflow and behavior:
-- [docs/LABEL_BOUNDARIES.md](docs/LABEL_BOUNDARIES.md): How label boundaries are detected.
-- [docs/PLAN.md](docs/PLAN.md): Implementation plan and workflow notes.
-- [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md): Refactor phases and status.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md): Timeline of changes.
-
-Standards:
-- [docs/PYTHON_STYLE.md](docs/PYTHON_STYLE.md): Python style rules for this repo.
-- [docs/MARKDOWN_STYLE.md](docs/MARKDOWN_STYLE.md): Markdown style rules for this repo.
-- [docs/REPO_STYLE.md](docs/REPO_STYLE.md): Repo organization and conventions.
+<!-- screenshots:begin (managed by screenshot-docs) -->
+![Avery 5167 sheet of LEGO brick storage labels with part numbers, sizes, and rendered brick images](docs/screenshots/avery_5167_label_sheet.png)
+<!-- screenshots:end -->
 
 ## Quick start
 ```bash
@@ -25,9 +13,24 @@ python3 lbx_to_avery_5167.py LEGO_BRICK_LABELS-v40/Labels \
   --draw-outlines
 ```
 
-Add `--calibration` to prepend a calibration page. Omit `--include-partial` to only generate full 80-label pages.
+Add `--calibration` to prepend a calibration page. Add `--include-partial` to also emit a partial final page instead of only full 80-label pages. See [docs/USAGE.md](docs/USAGE.md) for the full flag list.
+
+## Documentation
+
+Getting started:
+- [docs/INSTALL.md](docs/INSTALL.md): Setup requirements and dependencies.
+- [docs/USAGE.md](docs/USAGE.md): CLI usage, flags, and examples.
+
+Understanding the tool:
+- [docs/CODE_ARCHITECTURE.md](docs/CODE_ARCHITECTURE.md): High-level design and data flow.
+- [docs/FILE_STRUCTURE.md](docs/FILE_STRUCTURE.md): Directory map and what belongs where.
+- [docs/LABEL_BOUNDARIES.md](docs/LABEL_BOUNDARIES.md): How label boundaries are detected.
+
+Reference:
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): Known issues and fixes.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): Timeline of changes.
 
 ## Testing
 ```bash
-python3 -m pytest tests/
+pytest tests/
 ```

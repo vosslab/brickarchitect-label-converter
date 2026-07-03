@@ -1,12 +1,26 @@
-## Coding Style
-See Python coding style in docs/PYTHON_STYLE.md.
-See Markdown style in docs/MARKDOWN_STYLE.md.
-See repo style in docs/REPO_STYLE.md.
-When making edits, document them in docs/CHANGELOG.md.
-When in doubt, implement the changes the user asked for rather than waiting for a response; the user is not the best reader and will likely miss your request and then be confused why it was not implemented or fixed.
-When changing code always run tests, documentation does not require tests.
-Agents may run programs in the tests folder, including smoke tests and pyflakes/mypy runner scripts.
+# AGENTS.md
+
+Pointer file for agents. Canonical rules live in docs; do not restate them here.
+
+## Style and conventions
+- Python: docs/PYTHON_STYLE.md
+- Markdown: docs/MARKDOWN_STYLE.md
+- Repo layout and workflow: docs/REPO_STYLE.md
+- Pytest: docs/PYTEST_STYLE.md
+- End-to-end tests: docs/E2E_TESTS.md
+- Hook behavior: docs/CLAUDE_HOOK_USAGE_GUIDE.md
+
+## Orientation
+- Architecture: docs/CODE_ARCHITECTURE.md
+- File layout: docs/FILE_STRUCTURE.md
+- Install and usage: docs/INSTALL.md, docs/USAGE.md
+
+## Repo-specific rules
+- Log every edit in docs/CHANGELOG.md.
+- When in doubt, implement the change the user asked for rather than waiting to confirm.
+- When changing code, always run tests; documentation changes do not require tests.
+- Agents may run programs under tests/, including smoke tests and pyflakes/mypy runners.
 
 ## Environment
-Codex must run Python using `/opt/homebrew/opt/python@3.12/bin/python3.12` (use Python 3.12 only). This is only for Codex's runtime, not a requirement for repo scripts.
-On this user's macOS (Homebrew Python 3.12), Python modules are installed to `/opt/homebrew/lib/python3.12/site-packages/`.
+- Codex runs Python via `/opt/homebrew/opt/python@3.12/bin/python3.12` (3.12 only); this is Codex's runtime, not a repo-script requirement.
+- On this macOS (Homebrew Python 3.12), modules install to `/opt/homebrew/lib/python3.12/site-packages/`.

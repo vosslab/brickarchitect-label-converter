@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-07-03
+
+### Additions and New Features
+- Add `docs/FILE_FORMATS.md` documenting the LBX input container, the Avery 5167 PDF output geometry, tile PDFs, the manifest JSON schema, and the label-count and multi-image log files, linking to `docs/LABEL_BOUNDARIES.md` for segmentation detail.
+
+### Fixes and Maintenance
+- Add `docs/screenshots/avery_5167_label_sheet.png` (rendered from page 1 of the generated `output/avery_5167.pdf`) and embed it in the managed screenshot block of `README.md` so the GitHub landing page shows a real Avery 5167 label sheet of LEGO brick labels.
+- Standardize `README.md`: add core doc links (`docs/CODE_ARCHITECTURE.md`, `docs/FILE_STRUCTURE.md`), curate the documentation list, and verify the quick-start and testing commands.
+- Reserve a managed screenshots sentinel block in `README.md` for the screenshot-docs skill.
+- Refresh `docs/INSTALL.md` from `pyproject.toml`, `pip_requirements.txt`, `pip_requirements-dev.txt`, and `Brewfile`: add Python 3.12 requirement, runtime and dev package lists, `brew bundle` step, and a `--help` verify command.
+- Refresh `docs/USAGE.md` against the current `brickarchitect_label_converter.cli` argparse: correct the full flag set (including on/off toggles and `--stop-before-rendering`), add worked examples, and document inputs and outputs (PDF, `tiles/`, manifest JSON, label count log).
+- Refresh `docs/RELATED_PROJECTS.md` from repo evidence and bounded web discovery: add confirmed entries for the Brick Architect label source, the Brother P-touch LBX input format, the Avery 5167 output target, and the five `pyproject.toml` dependencies, plus possible same-domain tools (`jdlien/lbx-utils`, `Alecto3-D/brother-p-touch-editor-format`, `brickventory/lego-labels`) and a commonly-confused list.
+- Refresh `docs/CODE_ARCHITECTURE.md` from current source: document the five package modules, the `LabelObject` / `LabelCluster` / config dataclasses, the six-step `run_pipeline` data flow, outputs (PDF, `tiles/`, manifest JSON), testing, and extension points.
+- Refresh `docs/FILE_STRUCTURE.md` from current layout: add an ASCII top-level tree, the entry-point wrapper and root scripts, the `LEGO_BRICK_LABELS-v40` dataset breakdown (304 `.lbx` files, 16 category folders), the `devel/` tooling, tests and fixtures, and git-ignored generated artifacts.
+- Fix failing `pytest tests/`: add the `fitz` -> `pymupdf` import alias in `tests/test_import_requirements.py` so `import fitz` resolves to the declared `pymupdf` dependency, and correct broken same-folder markdown links in `docs/CHANGELOG.md` and `tests/TESTS_README.md`.
+- Refresh `docs/ROADMAP.md` from `docs/REFACTOR_PLAN.md` (Phases 0-4 all done) and `config.py` evidence: list near-term work (shrink the five whitelist sets, retire `GROUP_SPLIT_TEXT_THRESHOLD`, document printer calibration) and longer-term work (overlapping boxes, non-polyline separators, release plan).
+- Refresh `docs/TODO.md` as a real backlog derived from planning docs and config whitelists; note that no source `TODO`/`FIXME` markers exist.
+- Refresh `docs/TROUBLESHOOTING.md` with issues grounded in `docs/CHANGELOG.md` history and code behavior: setup and empty-input checks, label-splitting logs, ASCII glyph normalization, image bleed shrink, overlapping-label limitation, and calibration alignment.
+- Trim `AGENTS.md` to a bare-path pointer file: replace prose "See X in docs/..." lines with grouped pointers into the style, orientation, and test docs; preserve the repo-specific rules (changelog logging, implement-rather-than-wait, always-run-tests, agents may run tests/) and the Codex Python 3.12 interpreter and site-packages notes.
+- Correct doc references left stale by the `pyproject.toml` removal: `docs/FILE_STRUCTURE.md` no longer lists it in the top-level tree; `docs/INSTALL.md` no longer cites it for the Python 3.12 requirement or an unconfirmed editable install; `docs/RELATED_PROJECTS.md`'s five dependency citations now point to `pip_requirements.txt`; `docs/ROADMAP.md` no longer claims it exists for packaging. Also linked the `LABEL_BOUNDARIES.md` bare-filename reference in `docs/TROUBLESHOOTING.md` and pointed `docs/RELATED_PROJECTS.md`'s Brick Architect entry at the specific legacy (2023, v40) download page.
+- Rewrite `docs/USAGE.md` for a novice, terminal-nervous reader: plain-language intro, an explicit "before you start" check, a numbered first-run walkthrough with a single copy-paste command, a plain-language breakdown of each command part, and a "few options worth trying" section ahead of the full flag reference table.
+
+### Decisions and Failures
+- Removed `pyproject.toml`: this is a standalone app, not a published PyPI package, so packaging metadata and a build backend serve no purpose. `VERSION` remains the sole version source of truth. Known follow-up: `devel/submit_to_pypi.py` now hard-fails on any invocation (it requires `pyproject.toml` at the repo root) and its whole purpose (PyPI publishing) is moot under this decision; left in place pending a decision to delete it and its now-orphaned `packaging` dev dependency.
+- `pyproject.toml`'s removal also dropped its `[tool.pytest.ini_options] filterwarnings` suppression of three PyMuPDF SWIG-binding `DeprecationWarning`s (`SwigPyPacked`, `SwigPyObject`, `swigvarlink`). Decided not to re-suppress them in `tests/conftest.py`: they originate from an external dependency, not repo code, and are informational only (`pytest tests/` still passes 911/911 with them visible).
+
 ## 2026-03-10
 - Tighten cluster bounds to visual content for larger rendered labels.
 - Fix multiline text rendering order so lines display top-to-bottom instead of reversed.
@@ -70,18 +96,18 @@
 - Skip periodicity when splitting large XML groups to avoid oversplitting.
 - Add general image-text matching with score-based fallback to pairing.
 - Start Phase 3 with recursive segmentation of oversized clusters.
-- Mark Phase 3 (recursive segmentation) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
+- Mark Phase 3 (recursive segmentation) as done in [REFACTOR_PLAN.md](REFACTOR_PLAN.md).
 - Add label bbox invariant and rendered page smoke tests.
-- Document PyMuPDF dependency in [docs/INSTALL.md](docs/INSTALL.md).
-- Mark Phase 2 (general image-text matching) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
-- Add [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md) to track refactor phases.
+- Document PyMuPDF dependency in [INSTALL.md](INSTALL.md).
+- Mark Phase 2 (general image-text matching) as done in [REFACTOR_PLAN.md](REFACTOR_PLAN.md).
+- Add [REFACTOR_PLAN.md](REFACTOR_PLAN.md) to track refactor phases.
 - Split the pipeline into `brickarchitect_label_converter` modules and keep `lbx_to_avery_5167.py` as a wrapper entry point.
-- Mark Phase 4 (modularization) as done in [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md).
+- Mark Phase 4 (modularization) as done in [REFACTOR_PLAN.md](REFACTOR_PLAN.md).
 - Add `pip_requirements.txt` with the core runtime dependencies.
 - Use a `balc` import alias for `brickarchitect_label_converter` modules.
 - Merge adjacent numeric text fragments for `INDEX-slope` to form `SLOPE 45-55-75`.
 - Add `pyproject.toml` and `VERSION` for packaging metadata.
-- Update [docs/INSTALL.md](docs/INSTALL.md) to install dependencies via `pip_requirements.txt`.
+- Update [INSTALL.md](INSTALL.md) to install dependencies via `pip_requirements.txt`.
 - Refresh README documentation links and update the testing command.
 - Add documentation stubs for code architecture, file structure, roadmap, and troubleshooting.
 - Filter PyMuPDF swig deprecation warnings in pytest config.
